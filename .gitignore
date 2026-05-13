@@ -25,3 +25,4 @@ wheels/
 results/
 *.jsonl
 !tests/fixtures/*.jsonl
+dist/
