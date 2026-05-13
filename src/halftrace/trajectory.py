@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -55,7 +55,7 @@ class Turn(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=lambda: [])
     tool_results: list[ToolResult] = Field(default_factory=lambda: [])
     metadata: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class Trajectory(BaseModel):
