@@ -2,6 +2,7 @@
 
 **Diagnostics for agent loops. Measure how fast each capability decays over long trajectories.**
 
+[![CI](https://github.com/ruairidhwm/halftrace/actions/workflows/test.yml/badge.svg)](https://github.com/ruairidhwm/halftrace/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/halftrace.svg)](https://pypi.org/project/halftrace/)
 [![Python](https://img.shields.io/pypi/pyversions/halftrace.svg)](https://pypi.org/project/halftrace/)
 [![License](https://img.shields.io/pypi/l/halftrace.svg)](LICENSE)
