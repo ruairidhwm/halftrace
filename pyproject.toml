@@ -1,0 +1,52 @@
+[project]
+name = "halftrace"
+version = "0.0.1"
+description = "Diagnostics for agent loops. Measure how fast each capability decays over long trajectories."
+readme = "README.md"
+authors = [{ name = "Ruairidh Wynne-McCorry" }]
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["llm", "agents", "evaluation", "diagnostics", "tool-use"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["pydantic>=2.0"]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.50"]
+all = ["halftrace[anthropic,openai]"]
+
+[project.urls]
+Homepage = "https://halftrace.dev"
+Repository = "https://github.com/ruairidhwm/halftrace"
+Issues = "https://github.com/ruairidhwm/halftrace/issues"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pyright>=1.1.380", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

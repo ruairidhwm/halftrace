@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.pyright/
+
+# macOS
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Experiment outputs
+results/
+*.jsonl
+!tests/fixtures/*.jsonl
