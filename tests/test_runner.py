@@ -248,6 +248,11 @@ class TestArgParse:
         assert args.reps == 3
         assert args.output == Path("results/pilot.jsonl")
         assert not args.dry_run
+        assert not args.serial
+
+    def test_serial_flag_is_parsed(self) -> None:
+        args = parse_args(["--serial"])
+        assert args.serial
 
     def test_overrides_are_applied(self) -> None:
         args = parse_args(

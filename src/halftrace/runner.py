@@ -152,7 +152,13 @@ def run_pilot(
     )
 
 
-def _default_trial(model: str, max_tokens: int, max_iterations: int) -> TrialFn:
+def _default_trial(
+    model: str,
+    max_tokens: int,
+    max_iterations: int,
+    *,
+    serial: bool,
+) -> TrialFn:
     from halftrace.adapters import run_anthropic_task
 
     def trial(n: int, rep: int) -> tuple[Trajectory, Score]:
@@ -162,6 +168,7 @@ def _default_trial(model: str, max_tokens: int, max_iterations: int) -> TrialFn:
             model=model,
             max_tokens=max_tokens,
             max_iterations=max_iterations,
+            disable_parallel_tool_use=serial,
         )
         return trajectory, state_amnesia(trajectory)
 
@@ -200,6 +207,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument(
+        "--serial",
+        action="store_true",
+        help=(
+            "Disable parallel tool use: force one tool call per assistant turn. "
+            "Required to exercise context decay over N tool-call rounds."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the plan and exit without making API calls.",
@@ -223,7 +238,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  N={n} rep={rep}", file=sys.stderr)
         return 0
 
-    trial = _default_trial(args.model, args.max_tokens, args.max_iterations)
+    trial = _default_trial(
+        args.model, args.max_tokens, args.max_iterations, serial=args.serial
+    )
     result = run_pilot(
         model=args.model,
         n_values=args.n,

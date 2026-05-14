@@ -36,6 +36,7 @@ def run_anthropic_task(
     client: Anthropic | None = None,
     thinking: dict[str, Any] | None = None,
     cache_prompt: bool = True,
+    disable_parallel_tool_use: bool = False,
 ) -> Trajectory:
     """Run `task` against the Anthropic API and return a Trajectory.
 
@@ -91,6 +92,11 @@ def run_anthropic_task(
         }
         if anthropic_tools:
             create_kwargs["tools"] = anthropic_tools
+            if disable_parallel_tool_use:
+                create_kwargs["tool_choice"] = {
+                    "type": "auto",
+                    "disable_parallel_tool_use": True,
+                }
         if thinking is not None:
             create_kwargs["thinking"] = thinking
 

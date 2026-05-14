@@ -242,6 +242,29 @@ class TestApiCall:
         run_anthropic_task(task, client=client, thinking={"type": "adaptive"})
         assert fake.messages.calls[0]["thinking"] == {"type": "adaptive"}
 
+    def test_parallel_tool_use_is_allowed_by_default(self) -> None:
+        task = find_and_synthesise(2)
+        client, fake = _client(
+            _Response(
+                [_tool_block("c1", "submit_summary", {"summary": "done"})], "tool_use"
+            )
+        )
+        run_anthropic_task(task, client=client)
+        assert "tool_choice" not in fake.messages.calls[0]
+
+    def test_disable_parallel_tool_use_sets_tool_choice(self) -> None:
+        task = find_and_synthesise(2)
+        client, fake = _client(
+            _Response(
+                [_tool_block("c1", "submit_summary", {"summary": "done"})], "tool_use"
+            )
+        )
+        run_anthropic_task(task, client=client, disable_parallel_tool_use=True)
+        assert fake.messages.calls[0]["tool_choice"] == {
+            "type": "auto",
+            "disable_parallel_tool_use": True,
+        }
+
 
 class TestToolResultRoundTrip:
     """The adapter sends tool results back to the API in the correct shape."""
