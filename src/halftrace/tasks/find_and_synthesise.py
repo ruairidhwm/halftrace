@@ -28,7 +28,7 @@ _CODEWORDS = (
     "EAGLE",
 )
 
-_INSTRUCTION_DECAY_MARKER = "[[END]]"
+_STATUS_PATTERN = r"STATUS: \d+"
 
 
 def _plant_id(index: int) -> str:
@@ -104,15 +104,15 @@ class FindAndSynthesise:
 
         self.system_prompt = (
             "You are a research assistant.\n\n"
-            "OUTPUT FORMAT (must be followed every single turn): every text "
-            f"response you produce must end with the literal marker "
-            f"{_INSTRUCTION_DECAY_MARKER} on its own line. This applies to "
-            "every assistant message that contains any text, no matter how "
-            "short. The marker is how the system detects that your reply is "
-            "complete; do not omit it.\n\n"
+            "OUTPUT FORMAT (must be followed every single turn): start every "
+            "text response you produce with the prefix `STATUS: <N>` where "
+            "<N> is the count of text responses you have produced so far in "
+            "this conversation. Begin at STATUS: 1 for your first response "
+            "and increment by 1 every time you produce a new text response. "
+            "The status prefix must be the very first thing in your reply.\n\n"
             "Example of a correctly formatted assistant response:\n"
-            "  Looking up topic_1 now.\n"
-            f"  {_INSTRUCTION_DECAY_MARKER}\n\n"
+            "  STATUS: 3\n"
+            "  Looking up topic_3 now.\n\n"
             f"TASK: Use the `lookup` tool to retrieve the fact for each of the "
             f"{n} topics the user gives you, in order. Before every tool call, "
             "briefly state in one short sentence what you are about to do. "
@@ -154,8 +154,8 @@ class FindAndSynthesise:
 
         self.trajectory_metadata = {
             "instruction_decay": {
-                "rule_id": "end_with_marker",
-                "params": {"marker": _INSTRUCTION_DECAY_MARKER},
+                "rule_id": "starts_with_pattern",
+                "params": {"pattern": _STATUS_PATTERN},
             }
         }
 

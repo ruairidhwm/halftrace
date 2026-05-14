@@ -13,6 +13,7 @@ rule shape against the same params dict.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -31,8 +32,18 @@ def _ends_with_marker(content: str, params: dict[str, Any]) -> bool:
     return content.rstrip().endswith(marker)
 
 
+def _starts_with_pattern(content: str, params: dict[str, Any]) -> bool:
+    pattern = params.get("pattern")
+    if not isinstance(pattern, str):
+        raise ValueError(
+            f"starts_with_pattern rule requires a 'pattern' string param, got {pattern!r}"
+        )
+    return re.match(pattern, content.lstrip()) is not None
+
+
 _BUILTIN_MATCHERS: dict[str, Matcher] = {
     "end_with_marker": _ends_with_marker,
+    "starts_with_pattern": _starts_with_pattern,
 }
 
 

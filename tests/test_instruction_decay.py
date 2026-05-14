@@ -97,6 +97,53 @@ class TestRoleFiltering:
         assert score.n_observations == 1
 
 
+class TestStartsWithPattern:
+    """The starts_with_pattern matcher (regex prefix check)."""
+
+    def _t(self, pattern: str) -> Trajectory:
+        t = Trajectory()
+        t.metadata["instruction_decay"] = {
+            "rule_id": "starts_with_pattern",
+            "params": {"pattern": pattern},
+        }
+        return t
+
+    def test_pattern_match_at_start_is_compliant(self) -> None:
+        t = self._t(r"STATUS: \d+")
+        t.add_turn(role="assistant", content="STATUS: 3\nLooking up topic_3.")
+        assert instruction_decay(t).value == 1.0
+
+    def test_pattern_anywhere_else_is_non_compliant(self) -> None:
+        t = self._t(r"STATUS: \d+")
+        t.add_turn(role="assistant", content="Looking up topic_3. STATUS: 3")
+        assert instruction_decay(t).value == 0.0
+
+    def test_leading_whitespace_is_stripped_before_matching(self) -> None:
+        t = self._t(r"STATUS: \d+")
+        t.add_turn(role="assistant", content="\n\n  STATUS: 5\nNext step.")
+        assert instruction_decay(t).value == 1.0
+
+    def test_missing_pattern_param_raises(self) -> None:
+        t = Trajectory()
+        t.metadata["instruction_decay"] = {
+            "rule_id": "starts_with_pattern",
+            "params": {},
+        }
+        t.add_turn(role="assistant", content="hi")
+        with pytest.raises(ValueError, match="pattern"):
+            instruction_decay(t)
+
+    def test_partial_compliance_scores_fraction(self) -> None:
+        t = self._t(r"STATUS: \d+")
+        t.add_turn(role="assistant", content="STATUS: 1\ngood")
+        t.add_turn(role="assistant", content="forgot the prefix")
+        t.add_turn(role="assistant", content="STATUS: 3\ngood again")
+        t.add_turn(role="assistant", content="STATUS:bad")
+        score = instruction_decay(t)
+        assert score.value == 0.5
+        assert score.n_observations == 4
+
+
 class TestCustomMatcher:
     """The matcher hook lets callers score arbitrary rules."""
 
