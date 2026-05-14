@@ -30,6 +30,9 @@ Homepage = "https://halftrace.dev"
 Repository = "https://github.com/ruairidhwm/halftrace"
 Issues = "https://github.com/ruairidhwm/halftrace/issues"
 
+[project.scripts]
+halftrace = "halftrace.runner:main"
+
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pyright>=1.1.380", "ruff>=0.6"]
 

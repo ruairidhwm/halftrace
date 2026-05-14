@@ -29,10 +29,26 @@ def _tool_block(id_: str, name: str, input_: dict[str, Any]) -> Any:
     return ToolUseBlock(type="tool_use", id=id_, name=name, input=input_)
 
 
+def _usage(input_tokens: int = 0, output_tokens: int = 0) -> Any:
+    from anthropic.types import Usage
+
+    return Usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_creation_input_tokens=None,
+        cache_read_input_tokens=None,
+        server_tool_use=None,
+        service_tier=None,
+    )
+
+
 class _Response:
-    def __init__(self, content: list[Any], stop_reason: str) -> None:
+    def __init__(
+        self, content: list[Any], stop_reason: str, usage: Any | None = None
+    ) -> None:
         self.content = content
         self.stop_reason = stop_reason
+        self.usage = usage if usage is not None else _usage()
 
 
 class _Messages:
@@ -256,6 +272,30 @@ class TestToolResultRoundTrip:
         assert tool_turns[0].tool_results[0].is_error
         second_call = fake.messages.calls[1]
         assert second_call["messages"][-1]["content"][0]["is_error"]
+
+
+class TestUsageTracking:
+    """The adapter accumulates per-call usage into trajectory metadata."""
+
+    def test_usage_aggregates_across_iterations(self) -> None:
+        task = find_and_synthesise(2)
+        client, _ = _client(
+            _Response(
+                [_tool_block("c1", "lookup", {"topic": "topic_1"})],
+                "tool_use",
+                usage=_usage(input_tokens=100, output_tokens=10),
+            ),
+            _Response(
+                [_tool_block("c2", "submit_summary", {"summary": "ok"})],
+                "tool_use",
+                usage=_usage(input_tokens=120, output_tokens=15),
+            ),
+        )
+        trajectory = run_anthropic_task(task, client=client)
+        usage = trajectory.metadata["usage"]
+        assert usage["input_tokens"] == 220
+        assert usage["output_tokens"] == 25
+        assert usage["n_requests"] == 2
 
 
 class TestAnnotationsFlow:

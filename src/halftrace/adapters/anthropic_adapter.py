@@ -17,7 +17,7 @@ from typing import Any, cast
 
 import anthropic
 from anthropic import Anthropic
-from anthropic.types import Message, TextBlock, ToolUseBlock
+from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
 
 from halftrace.tasks.base import Task, ToolSpec
 from halftrace.trajectory import ToolCall, ToolResult, Trajectory
@@ -74,6 +74,14 @@ def run_anthropic_task(
         {"role": "user", "content": task.initial_user_message}
     ]
 
+    usage_totals: dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "n_requests": 0,
+    }
+
     for _ in range(max_iterations):
         create_kwargs: dict[str, Any] = {
             "model": model,
@@ -87,6 +95,7 @@ def run_anthropic_task(
             create_kwargs["thinking"] = thinking
 
         response = cast("Message", client.messages.create(**create_kwargs))
+        _accumulate_usage(usage_totals, response.usage)
         text_content, tool_calls, tool_uses = _parse_response(response)
 
         trajectory.add_turn(
@@ -134,7 +143,16 @@ def run_anthropic_task(
         if task.is_done():
             break
 
+    trajectory.metadata["usage"] = usage_totals
     return trajectory
+
+
+def _accumulate_usage(totals: dict[str, int], usage: Usage) -> None:
+    totals["input_tokens"] += usage.input_tokens
+    totals["output_tokens"] += usage.output_tokens
+    totals["cache_creation_input_tokens"] += usage.cache_creation_input_tokens or 0
+    totals["cache_read_input_tokens"] += usage.cache_read_input_tokens or 0
+    totals["n_requests"] += 1
 
 
 def _to_anthropic_tools(specs: list[ToolSpec], *, cache: bool) -> list[dict[str, Any]]:
