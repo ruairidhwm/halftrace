@@ -30,6 +30,7 @@ _CODEWORDS = (
 )
 
 _PLANT_ID = "password"
+_INSTRUCTION_DECAY_MARKER = "[[END]]"
 
 
 def _random_codeword(rng: random.Random) -> str:
@@ -52,6 +53,7 @@ class FindAndSynthesise:
     system_prompt: str
     initial_user_message: str
     tool_specs: list[ToolSpec]
+    trajectory_metadata: dict[str, Any]
 
     def __init__(self, n: int, *, seed: int = 0) -> None:
         if n < 2:
@@ -73,7 +75,11 @@ class FindAndSynthesise:
             "When you are asked a recall question, answer it in plain text "
             "before making any further tool calls. After all topics have been "
             "looked up, call `submit_summary` with a brief synthesis to end "
-            "the task."
+            "the task. "
+            "Before every tool call, briefly state in one short sentence what "
+            f"you are about to do. End every text response you make with the "
+            f"marker '{_INSTRUCTION_DECAY_MARKER}' on its own at the end so the "
+            "system can detect when your reply is complete."
         )
         self.initial_user_message = (
             f"Please research these {n} topics, in order: "
@@ -104,6 +110,13 @@ class FindAndSynthesise:
                 },
             ),
         ]
+
+        self.trajectory_metadata = {
+            "instruction_decay": {
+                "rule_id": "end_with_marker",
+                "params": {"marker": _INSTRUCTION_DECAY_MARKER},
+            }
+        }
 
         self._lookup_count = 0
         self._summary_submitted = False

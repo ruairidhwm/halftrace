@@ -47,13 +47,16 @@ class Task(Protocol):
 
     Adapters consume Task instances structurally: read the prompts and
     tool specs to set up the agent, forward tool calls to `handle_tool_call`,
-    and stop when `is_done` returns True.
+    and stop when `is_done` returns True. `trajectory_metadata` is merged
+    into the resulting Trajectory's metadata so probes (e.g. instruction_decay)
+    can find their configuration.
     """
 
     id: str
     system_prompt: str
     initial_user_message: str
     tool_specs: list[ToolSpec]
+    trajectory_metadata: dict[str, Any]
 
     def handle_tool_call(self, name: str, args: dict[str, Any]) -> ToolResponse: ...
 

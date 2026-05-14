@@ -16,21 +16,38 @@ from halftrace.runner import (
 
 
 def _fake_trial(value: float, usage: dict[str, int] | None = None):
-    def trial(n: int, rep: int) -> tuple[Trajectory, Score]:
+    def trial(n: int, rep: int) -> tuple[Trajectory, dict[str, Score]]:
         t = Trajectory(task_id=f"fake/n={n}/rep={rep}")
         if usage is not None:
             t.metadata["usage"] = usage
         s = Score(probe="state_amnesia", value=value, n_observations=1)
-        return t, s
+        return t, {"state_amnesia": s}
 
     return trial
 
 
 def _decaying_trial(n_to_value: dict[int, float]):
-    def trial(n: int, rep: int) -> tuple[Trajectory, Score]:
+    def trial(n: int, rep: int) -> tuple[Trajectory, dict[str, Score]]:
         t = Trajectory(task_id=f"fake/n={n}/rep={rep}")
         s = Score(probe="state_amnesia", value=n_to_value[n], n_observations=1)
-        return t, s
+        return t, {"state_amnesia": s}
+
+    return trial
+
+
+def _multi_probe_trial(
+    state_value: float, instruction_value: float
+):
+    def trial(n: int, rep: int) -> tuple[Trajectory, dict[str, Score]]:
+        t = Trajectory(task_id=f"fake/n={n}/rep={rep}")
+        return t, {
+            "state_amnesia": Score(
+                probe="state_amnesia", value=state_value, n_observations=1
+            ),
+            "instruction_decay": Score(
+                probe="instruction_decay", value=instruction_value, n_observations=1
+            ),
+        }
 
     return trial
 
@@ -128,8 +145,21 @@ class TestRunPilotOutput:
         assert record["n"] == 5
         assert record["rep"] == 0
         assert record["model"] == "claude-sonnet-4-6"
-        assert record["score"]["value"] == 0.5
+        assert record["scores"]["state_amnesia"]["value"] == 0.5
         assert "trajectory" in record
+
+    def test_multi_probe_scores_are_all_recorded(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.jsonl"
+        run_pilot(
+            model="x",
+            n_values=[5],
+            reps=1,
+            output_path=out,
+            trial=_multi_probe_trial(state_value=1.0, instruction_value=0.6),
+        )
+        record = json.loads(out.read_text().strip())
+        assert record["scores"]["state_amnesia"]["value"] == 1.0
+        assert record["scores"]["instruction_decay"]["value"] == 0.6
 
     def test_creates_parent_directories(self, tmp_path: Path) -> None:
         out = tmp_path / "nested" / "subdir" / "out.jsonl"
@@ -144,7 +174,7 @@ class TestRunPilotOutput:
 
 
 class TestHalftraceFitting:
-    """The runner fits a halftrace from collected scores."""
+    """The runner fits one halftrace per probe."""
 
     def test_clean_decay_curve_produces_a_halftrace(self, tmp_path: Path) -> None:
         result = run_pilot(
@@ -154,9 +184,10 @@ class TestHalftraceFitting:
             output_path=tmp_path / "out.jsonl",
             trial=_decaying_trial({5: 1.0, 10: 0.7, 20: 0.2}),
         )
-        assert result.halftrace is not None
-        assert result.halftrace.value is not None
-        assert 10 < result.halftrace.value < 20
+        h = result.halftraces["state_amnesia"]
+        assert h is not None
+        assert h.value is not None
+        assert 10 < h.value < 20
 
     def test_no_crossing_yields_none_value(self, tmp_path: Path) -> None:
         result = run_pilot(
@@ -166,8 +197,19 @@ class TestHalftraceFitting:
             output_path=tmp_path / "out.jsonl",
             trial=_fake_trial(0.9),
         )
-        assert result.halftrace is not None
-        assert result.halftrace.value is None
+        h = result.halftraces["state_amnesia"]
+        assert h is not None
+        assert h.value is None
+
+    def test_one_halftrace_per_probe(self, tmp_path: Path) -> None:
+        result = run_pilot(
+            model="x",
+            n_values=[5, 10],
+            reps=2,
+            output_path=tmp_path / "out.jsonl",
+            trial=_multi_probe_trial(state_value=1.0, instruction_value=0.3),
+        )
+        assert set(result.halftraces) == {"state_amnesia", "instruction_decay"}
 
 
 class TestUsageAggregation:

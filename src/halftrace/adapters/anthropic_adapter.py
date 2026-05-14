@@ -55,6 +55,8 @@ def run_anthropic_task(
         client = anthropic.Anthropic()
 
     trajectory = Trajectory(task_id=task.id, model=model)
+    for k, v in task.trajectory_metadata.items():
+        trajectory.metadata[k] = v
     trajectory.add_turn("system", content=task.system_prompt)
     trajectory.add_turn("user", content=task.initial_user_message)
 

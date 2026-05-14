@@ -22,12 +22,18 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict
 
 from halftrace.fit import Halftrace, fit_halftrace
-from halftrace.probes import Score, state_amnesia
+from halftrace.probes import Score, instruction_decay, state_amnesia
+from halftrace.probes.base import Probe
 from halftrace.tasks import find_and_synthesise
 from halftrace.trajectory import Trajectory
 
-TrialFn = Callable[[int, int], tuple[Trajectory, Score]]
+TrialFn = Callable[[int, int], tuple[Trajectory, dict[str, Score]]]
 ProgressFn = Callable[[str], None]
+
+PROBES: dict[str, Probe] = {
+    "state_amnesia": state_amnesia,
+    "instruction_decay": instruction_decay,
+}
 
 _PRICING_PER_M_TOKENS: dict[str, tuple[float, float]] = {
     "claude-opus-4-7": (5.0, 25.0),
@@ -46,7 +52,7 @@ class PilotResult(BaseModel):
     n_values: list[int]
     reps: int
     n_trajectories: int
-    halftrace: Halftrace | None = None
+    halftraces: dict[str, Halftrace | None] = {}
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cache_read_tokens: int = 0
@@ -94,7 +100,7 @@ def run_pilot(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    scores_by_n: dict[int, list[float]] = {n: [] for n in n_values}
+    scores_by_probe_and_n: dict[str, dict[int, list[float]]] = {}
     totals: dict[str, int] = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -110,10 +116,12 @@ def run_pilot(
                 if progress is not None:
                     progress(f"[{n_trajectories}] N={n} rep={rep}")
 
-                trajectory, score = trial(n, rep)
+                trajectory, scores = trial(n, rep)
 
-                if score.value is not None:
-                    scores_by_n[n].append(score.value)
+                for probe_name, score in scores.items():
+                    by_n = scores_by_probe_and_n.setdefault(probe_name, {})
+                    if score.value is not None:
+                        by_n.setdefault(n, []).append(score.value)
 
                 raw_usage = trajectory.metadata.get("usage")
                 if isinstance(raw_usage, dict):
@@ -127,23 +135,27 @@ def run_pilot(
                     "n": n,
                     "rep": rep,
                     "model": model,
-                    "score": score.model_dump(mode="json"),
+                    "scores": {
+                        name: s.model_dump(mode="json") for name, s in scores.items()
+                    },
                     "trajectory": trajectory.model_dump(mode="json"),
                 }
                 f.write(json.dumps(record) + "\n")
                 f.flush()
 
-    non_empty = {n: scores for n, scores in scores_by_n.items() if scores}
-    halftrace: Halftrace | None = None
-    if len(non_empty) >= 2:
-        halftrace = fit_halftrace(non_empty, n_bootstrap=1000)
+    halftraces: dict[str, Halftrace | None] = {}
+    for probe_name, by_n in scores_by_probe_and_n.items():
+        if len(by_n) >= 2:
+            halftraces[probe_name] = fit_halftrace(by_n, n_bootstrap=1000)
+        else:
+            halftraces[probe_name] = None
 
     return PilotResult(
         model_name=model,
         n_values=n_values,
         reps=reps,
         n_trajectories=n_trajectories,
-        halftrace=halftrace,
+        halftraces=halftraces,
         total_input_tokens=totals["input_tokens"],
         total_output_tokens=totals["output_tokens"],
         total_cache_read_tokens=totals["cache_read_input_tokens"],
@@ -161,7 +173,7 @@ def _default_trial(
 ) -> TrialFn:
     from halftrace.adapters import run_anthropic_task
 
-    def trial(n: int, rep: int) -> tuple[Trajectory, Score]:
+    def trial(n: int, rep: int) -> tuple[Trajectory, dict[str, Score]]:
         task = find_and_synthesise(n, seed=rep)
         trajectory = run_anthropic_task(
             task,
@@ -170,7 +182,8 @@ def _default_trial(
             max_iterations=max_iterations,
             disable_parallel_tool_use=serial,
         )
-        return trajectory, state_amnesia(trajectory)
+        scores = {name: probe(trajectory) for name, probe in PROBES.items()}
+        return trajectory, scores
 
     return trial
 
@@ -259,26 +272,27 @@ def main(argv: list[str] | None = None) -> int:
     if result.estimated_cost_usd is not None:
         print(f"Estimated cost:         ${result.estimated_cost_usd:.4f}", file=sys.stderr)
 
-    if result.halftrace is not None:
-        h = result.halftrace
-        if h.value is not None:
-            print(f"\nstate_amnesia halftrace: {h.value:.2f}", file=sys.stderr)
-            if h.ci_low is not None and h.ci_high is not None:
-                print(f"95% CI: [{h.ci_low:.2f}, {h.ci_high:.2f}]", file=sys.stderr)
+    print("", file=sys.stderr)
+    for probe_name, h in result.halftraces.items():
+        if h is None:
             print(
-                f"Bootstrap: {h.n_bootstrap_resolved}/{h.n_bootstrap} resolved",
+                f"{probe_name}: no data (no annotations or fewer than 2 N values)",
+                file=sys.stderr,
+            )
+            continue
+        if h.value is None:
+            print(
+                f"{probe_name}: no crossing of {h.threshold} in tested N range",
                 file=sys.stderr,
             )
         else:
-            print(
-                "\nNo crossing of 0.5 in the tested N range.",
-                file=sys.stderr,
+            line = f"{probe_name}: halftrace = {h.value:.2f}"
+            if h.ci_low is not None and h.ci_high is not None:
+                line += f"  95% CI [{h.ci_low:.2f}, {h.ci_high:.2f}]"
+            line += (
+                f"  (bootstrap {h.n_bootstrap_resolved}/{h.n_bootstrap} resolved)"
             )
-    else:
-        print(
-            "\nNot enough data with non-None scores to fit a halftrace.",
-            file=sys.stderr,
-        )
+            print(line, file=sys.stderr)
 
     return 0
 
