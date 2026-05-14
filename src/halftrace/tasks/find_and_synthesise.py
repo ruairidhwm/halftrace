@@ -1,12 +1,11 @@
 """find_and_synthesise: the canonical agentic task for the context-rot study.
 
 The agent is given N topics and asked to look up each one via the `lookup`
-tool, then call `submit_summary` to end the task. The first lookup response
-plants a fact (a randomised password) and the last lookup response asks the
-agent to recall it. The agent's text response after the recall is what the
-`state_amnesia` probe scores.
-
-The task is parameterised by N, the number of lookup calls required.
+tool, then call `submit_summary` to end the task. `n_plants` codewords are
+injected into lookup responses at evenly-spaced positions across the
+trajectory; the final lookup asks the agent to recall all of them. The
+agent's text response after the recall is what the `state_amnesia` probe
+scores (per-codeword, aggregated to a single fraction).
 """
 
 from __future__ import annotations
@@ -29,8 +28,20 @@ _CODEWORDS = (
     "EAGLE",
 )
 
-_PLANT_ID = "password"
 _INSTRUCTION_DECAY_MARKER = "[[END]]"
+
+
+def _plant_id(index: int) -> str:
+    return f"password_{index + 1}"
+
+
+def _plant_positions(n: int, n_plants: int) -> list[int]:
+    """Evenly-spaced lookup indices in [0, n-1) for the planted facts.
+
+    Recall fires on lookup index ``n-1``; plants must precede it. Guaranteed
+    unique whenever ``n_plants <= n - 1``.
+    """
+    return [i * (n - 1) // n_plants for i in range(n_plants)]
 
 
 def _random_codeword(rng: random.Random) -> str:
@@ -38,15 +49,22 @@ def _random_codeword(rng: random.Random) -> str:
 
 
 class FindAndSynthesise:
-    """N lookups + a submit, with one plant/recall pair across the trajectory.
+    """N lookups + a submit, with one or more plants spread across the trajectory.
 
-    Construct directly (`FindAndSynthesise(n=10)`) or via the convenience
-    factory `find_and_synthesise(10)`. `seed` controls the randomised topic
-    facts and the planted codeword for reproducibility.
+    Construct directly (`FindAndSynthesise(n=10, n_plants=3)`) or via the
+    convenience factory `find_and_synthesise(10, n_plants=3)`. `seed`
+    controls the randomised topic facts and the planted codewords for
+    reproducibility.
+
+    `n_plants` codewords are injected at evenly-spaced lookup positions in
+    `[0, n-1)` (inclusive of 0, exclusive of `n-1` which is reserved for the
+    recall). All planted codewords are recalled together in one final
+    question; the state_amnesia probe scores each codeword independently
+    and aggregates to a fraction.
 
     Task instances are stateful and single-use: construct a fresh one per
-    trajectory. Vary `seed` across repetitions so the planted codeword
-    changes between reps.
+    trajectory. Vary `seed` across repetitions so the planted codewords
+    change between reps.
     """
 
     id: str
@@ -55,18 +73,34 @@ class FindAndSynthesise:
     tool_specs: list[ToolSpec]
     trajectory_metadata: dict[str, Any]
 
-    def __init__(self, n: int, *, seed: int = 0) -> None:
+    def __init__(self, n: int, *, n_plants: int = 1, seed: int = 0) -> None:
         if n < 2:
             raise ValueError(f"find_and_synthesise requires n >= 2, got {n}")
+        if n_plants < 1:
+            raise ValueError(f"find_and_synthesise requires n_plants >= 1, got {n_plants}")
+        if n_plants > n - 1:
+            raise ValueError(
+                f"find_and_synthesise requires n_plants <= n - 1 (= {n - 1}); "
+                f"got n_plants={n_plants}"
+            )
         self.n = n
-        self.id = f"find_and_synthesise/n={n}/seed={seed}"
+        self.n_plants = n_plants
+        self.id = f"find_and_synthesise/n={n}/k={n_plants}/seed={seed}"
 
         rng = random.Random(seed)
         self._topics: list[str] = [f"topic_{i + 1}" for i in range(n)]
         self._facts: dict[str, str] = {
             t: f"the value of {t} is {rng.randint(1000, 9999)}" for t in self._topics
         }
-        self._planted_codeword: str = _random_codeword(rng)
+        self._codewords: list[str] = [_random_codeword(rng) for _ in range(n_plants)]
+        self._plant_ids: list[str] = [_plant_id(i) for i in range(n_plants)]
+        self._plant_positions: list[int] = _plant_positions(n, n_plants)
+        self._plants_by_index: dict[int, tuple[str, str]] = {
+            pos: (pid, code)
+            for pos, pid, code in zip(
+                self._plant_positions, self._plant_ids, self._codewords, strict=True
+            )
+        }
 
         self.system_prompt = (
             "You are a research assistant.\n\n"
@@ -129,9 +163,9 @@ class FindAndSynthesise:
         self._summary_submitted = False
 
     @property
-    def planted_codeword(self) -> str:
-        """The codeword the agent is asked to recall."""
-        return self._planted_codeword
+    def planted_codewords(self) -> list[str]:
+        """The codewords the agent is asked to recall, in plant order."""
+        return list(self._codewords)
 
     @property
     def topics(self) -> list[str]:
@@ -163,21 +197,34 @@ class FindAndSynthesise:
         parts: list[str] = [fact]
         annotations: dict[str, Any] = {}
 
-        if index == 0:
+        if index in self._plants_by_index:
+            plant_id, codeword = self._plants_by_index[index]
+            plant_number = self._plant_ids.index(plant_id) + 1
             parts.append(
-                f"Please remember this password for later: {self._planted_codeword}."
+                f"Please remember password #{plant_number} for later: {codeword}."
             )
             annotations["state_amnesia"] = {
                 "role": "plant",
-                "fact_id": _PLANT_ID,
-                "fact": self._planted_codeword,
+                "fact_id": plant_id,
+                "fact": codeword,
             }
+
         if index == self.n - 1:
-            parts.append(
-                "Recall question: what was the password I asked you to remember? "
-                "Please answer in plain text before continuing."
-            )
-            annotations["state_amnesia"] = {"role": "recall", "fact_id": _PLANT_ID}
+            if self.n_plants == 1:
+                parts.append(
+                    "Recall question: what was the password I asked you to "
+                    "remember? Please answer in plain text before continuing."
+                )
+            else:
+                parts.append(
+                    f"Recall question: list all {self.n_plants} passwords I "
+                    "asked you to remember, in any order. Please answer in "
+                    "plain text before continuing."
+                )
+            annotations["state_amnesia"] = {
+                "role": "recall",
+                "fact_ids": list(self._plant_ids),
+            }
 
         return ToolResponse(result=" ".join(parts), annotations=annotations)
 
@@ -192,6 +239,8 @@ class FindAndSynthesise:
         return ToolResponse(result="Summary received. Task complete.")
 
 
-def find_and_synthesise(n: int, *, seed: int = 0) -> FindAndSynthesise:
-    """Construct a FindAndSynthesise task at scale N."""
-    return FindAndSynthesise(n, seed=seed)
+def find_and_synthesise(
+    n: int, *, n_plants: int = 1, seed: int = 0
+) -> FindAndSynthesise:
+    """Construct a FindAndSynthesise task at scale N with `n_plants` plants."""
+    return FindAndSynthesise(n, n_plants=n_plants, seed=seed)

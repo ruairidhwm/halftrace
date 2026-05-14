@@ -170,11 +170,12 @@ def _default_trial(
     max_iterations: int,
     *,
     serial: bool,
+    n_plants: int,
 ) -> TrialFn:
     from halftrace.adapters import run_anthropic_task
 
     def trial(n: int, rep: int) -> tuple[Trajectory, dict[str, Score]]:
-        task = find_and_synthesise(n, seed=rep)
+        task = find_and_synthesise(n, seed=rep, n_plants=n_plants)
         trajectory = run_anthropic_task(
             task,
             model=model,
@@ -220,6 +221,15 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument(
+        "--n-plants",
+        type=int,
+        default=1,
+        help=(
+            "Number of state_amnesia plants per trajectory (default: 1). "
+            "Must be <= min(N) - 1 across all --n values."
+        ),
+    )
+    parser.add_argument(
         "--serial",
         action="store_true",
         help=(
@@ -252,7 +262,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     trial = _default_trial(
-        args.model, args.max_tokens, args.max_iterations, serial=args.serial
+        args.model,
+        args.max_tokens,
+        args.max_iterations,
+        serial=args.serial,
+        n_plants=args.n_plants,
     )
     result = run_pilot(
         model=args.model,

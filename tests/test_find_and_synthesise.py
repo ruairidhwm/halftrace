@@ -21,27 +21,41 @@ class TestConstruction:
         t1 = find_and_synthesise(10, seed=0)
         t2 = FindAndSynthesise(10, seed=0)
         assert t1.id == t2.id
-        assert t1.planted_codeword == t2.planted_codeword
+        assert t1.planted_codewords == t2.planted_codewords
         assert t1.topics == t2.topics
 
     def test_n_below_two_raises(self) -> None:
         with pytest.raises(ValueError, match="n >= 2"):
             find_and_synthesise(1)
 
-    def test_id_encodes_n_and_seed(self) -> None:
-        task = find_and_synthesise(25, seed=7)
+    def test_n_plants_below_one_raises(self) -> None:
+        with pytest.raises(ValueError, match="n_plants >= 1"):
+            find_and_synthesise(10, n_plants=0)
+
+    def test_n_plants_too_large_raises(self) -> None:
+        with pytest.raises(ValueError, match="n_plants <= n - 1"):
+            find_and_synthesise(5, n_plants=5)
+
+    def test_id_encodes_n_k_and_seed(self) -> None:
+        task = find_and_synthesise(25, n_plants=3, seed=7)
         assert "n=25" in task.id
+        assert "k=3" in task.id
         assert "seed=7" in task.id
 
-    def test_seed_makes_codeword_deterministic(self) -> None:
-        a = find_and_synthesise(10, seed=0)
-        b = find_and_synthesise(10, seed=0)
-        assert a.planted_codeword == b.planted_codeword
+    def test_seed_makes_codewords_deterministic(self) -> None:
+        a = find_and_synthesise(10, n_plants=3, seed=0)
+        b = find_and_synthesise(10, n_plants=3, seed=0)
+        assert a.planted_codewords == b.planted_codewords
 
     def test_different_seeds_produce_different_codewords(self) -> None:
-        # Not strictly guaranteed but should hold for the listed codewords + numbers.
-        seen = {find_and_synthesise(10, seed=s).planted_codeword for s in range(10)}
+        seen = {find_and_synthesise(10, seed=s).planted_codewords[0] for s in range(10)}
         assert len(seen) > 1
+
+    def test_planted_codewords_length_matches_n_plants(self) -> None:
+        task = find_and_synthesise(25, n_plants=5)
+        assert len(task.planted_codewords) == 5
+        # All codewords distinct (rng is seeded; for k=5 should hold)
+        assert len(set(task.planted_codewords)) == 5
 
     def test_topics_match_n(self) -> None:
         task = find_and_synthesise(5)
@@ -60,10 +74,10 @@ class TestLookupHandling:
         task = find_and_synthesise(5)
         response = task.handle_tool_call("lookup", {"topic": "topic_1"})
         assert not response.is_error
-        assert task.planted_codeword in response.result
+        assert task.planted_codewords[0] in response.result
         annotation = response.annotations["state_amnesia"]
         assert annotation["role"] == "plant"
-        assert annotation["fact"] == task.planted_codeword
+        assert annotation["fact"] == task.planted_codewords[0]
 
     def test_middle_lookups_have_no_annotations(self) -> None:
         task = find_and_synthesise(5)
@@ -79,15 +93,36 @@ class TestLookupHandling:
         response = task.handle_tool_call("lookup", {"topic": "topic_3"})
         annotation = response.annotations["state_amnesia"]
         assert annotation["role"] == "recall"
-        assert annotation["fact_id"] == "password"
+        assert annotation["fact_ids"] == ["password_1"]
         assert "password" in response.result.lower()
 
     def test_plant_and_recall_share_fact_id(self) -> None:
         task = find_and_synthesise(2)
         first = task.handle_tool_call("lookup", {"topic": "topic_1"})
         last = task.handle_tool_call("lookup", {"topic": "topic_2"})
-        assert first.annotations["state_amnesia"]["fact_id"] == "password"
-        assert last.annotations["state_amnesia"]["fact_id"] == "password"
+        assert first.annotations["state_amnesia"]["fact_id"] == "password_1"
+        assert last.annotations["state_amnesia"]["fact_ids"] == ["password_1"]
+
+    def test_multiple_plants_fire_at_evenly_spaced_positions(self) -> None:
+        # n=25, k=5 → positions [0, 4, 9, 14, 19]; recall on lookup 24.
+        task = find_and_synthesise(25, n_plants=5)
+        plant_positions: list[int] = []
+        for i, topic in enumerate(task.topics):
+            response = task.handle_tool_call("lookup", {"topic": topic})
+            ann = response.annotations.get("state_amnesia")
+            if ann is not None and ann["role"] == "plant":
+                plant_positions.append(i)
+        assert plant_positions == [0, 4, 9, 14, 19]
+
+    def test_recall_at_last_lookup_lists_all_fact_ids(self) -> None:
+        task = find_and_synthesise(10, n_plants=3)
+        responses = [
+            task.handle_tool_call("lookup", {"topic": t}) for t in task.topics
+        ]
+        last_ann = responses[-1].annotations["state_amnesia"]
+        assert last_ann["role"] == "recall"
+        assert last_ann["fact_ids"] == ["password_1", "password_2", "password_3"]
+        assert "3 passwords" in responses[-1].result
 
     def test_unknown_topic_returns_error(self) -> None:
         task = find_and_synthesise(5)
@@ -179,7 +214,7 @@ class TestEndToEndWithStateAmnesia:
         # Both find_and_synthesise calls use seed=0 so the codewords match.
         task = find_and_synthesise(5)
         traj = self._run_simulated(
-            5, agent_recall_answer=f"the password was {task.planted_codeword}."
+            5, agent_recall_answer=f"the password was {task.planted_codewords[0]}."
         )
         score = state_amnesia(traj)
         assert score.value == 1.0
@@ -203,7 +238,7 @@ class TestEndToEndWithStateAmnesia:
     def test_n_two_still_produces_one_observation(self) -> None:
         # Smallest valid task: plant on lookup 0, recall on lookup 1.
         task = find_and_synthesise(2)
-        traj = self._run_simulated(2, agent_recall_answer=task.planted_codeword)
+        traj = self._run_simulated(2, agent_recall_answer=task.planted_codewords[0])
         score = state_amnesia(traj)
         assert score.value == 1.0
         assert score.n_observations == 1

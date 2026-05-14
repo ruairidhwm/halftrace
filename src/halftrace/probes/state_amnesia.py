@@ -8,10 +8,11 @@ fact appears.
 Tasks annotate plant and recall turns via `Turn.metadata["state_amnesia"]`:
 
     Plant:  {"role": "plant",  "fact_id": "<id>", "fact": "<text>"}
-    Recall: {"role": "recall", "fact_id": "<id>"}
+    Recall: {"role": "recall", "fact_ids": ["<id>", "<id>", ...]}
 
-The probe pairs each recall with the next assistant turn that has text content
-and reports the fraction of recalls answered correctly.
+A recall annotation may reference one or more planted fact_ids. The probe
+pairs each (recall_turn, fact_id) with the next assistant text turn after
+the recall and reports the fraction of recalls answered correctly.
 """
 
 from __future__ import annotations
@@ -59,12 +60,12 @@ def state_amnesia(
             )
         annotation = cast("dict[str, Any]", raw)
         role = annotation.get("role")
-        fact_id = annotation.get("fact_id")
-        if not isinstance(fact_id, str):
-            raise ValueError(
-                f"state_amnesia annotation at turn {turn.index} is missing a string fact_id"
-            )
         if role == "plant":
+            fact_id = annotation.get("fact_id")
+            if not isinstance(fact_id, str):
+                raise ValueError(
+                    f"state_amnesia plant at turn {turn.index} is missing a string fact_id"
+                )
             fact = annotation.get("fact")
             if not isinstance(fact, str):
                 raise ValueError(
@@ -72,7 +73,19 @@ def state_amnesia(
                 )
             plants[fact_id] = fact
         elif role == "recall":
-            recalls.append((turn.index, fact_id))
+            raw_fact_ids = annotation.get("fact_ids")
+            if not isinstance(raw_fact_ids, list):
+                raise ValueError(
+                    f"state_amnesia recall at turn {turn.index} is missing a "
+                    "list 'fact_ids'"
+                )
+            for fid in cast("list[Any]", raw_fact_ids):
+                if not isinstance(fid, str):
+                    raise ValueError(
+                        f"state_amnesia recall at turn {turn.index} has a "
+                        f"non-string fact_id: {fid!r}"
+                    )
+                recalls.append((turn.index, fid))
         else:
             raise ValueError(
                 f"state_amnesia annotation at turn {turn.index} has unknown role {role!r}"

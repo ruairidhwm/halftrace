@@ -22,7 +22,7 @@ def _recall(traj: Trajectory, fact_id: str, content: str = "What was it?") -> No
     traj.add_turn(
         role="user",
         content=content,
-        metadata={"state_amnesia": {"role": "recall", "fact_id": fact_id}},
+        metadata={"state_amnesia": {"role": "recall", "fact_ids": [fact_id]}},
     )
 
 
@@ -48,6 +48,50 @@ class TestEmptyOrTrivial:
         t.add_turn(role="assistant", content="hi")
         score = state_amnesia(t)
         assert score.value is None
+
+
+class TestMultiplePlantsOneRecall:
+    """A single recall annotation referencing multiple fact_ids."""
+
+    def test_all_plants_recalled_correctly(self) -> None:
+        t = Trajectory()
+        _plant(t, "f1", "horse")
+        _plant(t, "f2", "tiger")
+        _plant(t, "f3", "falcon")
+        t.add_turn(
+            role="user",
+            metadata={
+                "state_amnesia": {
+                    "role": "recall",
+                    "fact_ids": ["f1", "f2", "f3"],
+                }
+            },
+        )
+        t.add_turn(role="assistant", content="I remember horse, tiger, and falcon.")
+        score = state_amnesia(t)
+        assert score.value == 1.0
+        assert score.n_observations == 3
+
+    def test_mixed_recall_scores_fraction_per_fact(self) -> None:
+        t = Trajectory()
+        _plant(t, "f1", "horse")
+        _plant(t, "f2", "tiger")
+        _plant(t, "f3", "falcon")
+        t.add_turn(
+            role="user",
+            metadata={
+                "state_amnesia": {
+                    "role": "recall",
+                    "fact_ids": ["f1", "f2", "f3"],
+                }
+            },
+        )
+        # Agent only mentions one of the three.
+        t.add_turn(role="assistant", content="Only tiger comes to mind.")
+        score = state_amnesia(t)
+        assert score.value is not None
+        assert abs(score.value - 1 / 3) < 1e-9
+        assert score.n_observations == 3
 
 
 class TestScoring:
@@ -201,10 +245,29 @@ class TestValidation:
         with pytest.raises(ValueError, match="must be a dict"):
             state_amnesia(t)
 
-    def test_missing_fact_id_raises(self) -> None:
+    def test_plant_missing_fact_id_raises(self) -> None:
         t = Trajectory()
         t.add_turn(role="user", metadata={"state_amnesia": {"role": "plant", "fact": "x"}})
         with pytest.raises(ValueError, match="fact_id"):
+            state_amnesia(t)
+
+    def test_recall_missing_fact_ids_list_raises(self) -> None:
+        t = Trajectory()
+        _plant(t, "f1", "the door is red")
+        # Recall annotation missing the 'fact_ids' list entirely
+        t.add_turn(role="user", metadata={"state_amnesia": {"role": "recall"}})
+        t.add_turn(role="assistant", content="answer")
+        with pytest.raises(ValueError, match="fact_ids"):
+            state_amnesia(t)
+
+    def test_recall_with_non_string_fact_id_raises(self) -> None:
+        t = Trajectory()
+        _plant(t, "f1", "the door is red")
+        t.add_turn(
+            role="user", metadata={"state_amnesia": {"role": "recall", "fact_ids": [42]}}
+        )
+        t.add_turn(role="assistant", content="answer")
+        with pytest.raises(ValueError, match="non-string fact_id"):
             state_amnesia(t)
 
     def test_plant_without_fact_text_raises(self) -> None:

@@ -81,7 +81,7 @@ class TestHappyPath:
 
     def test_loop_records_every_assistant_and_tool_turn(self) -> None:
         task = find_and_synthesise(2)
-        codeword = task.planted_codeword
+        codeword = task.planted_codewords[0]
         client, _ = _client(
             _Response([_tool_block("c1", "lookup", {"topic": "topic_1"})], "tool_use"),
             _Response([_tool_block("c2", "lookup", {"topic": "topic_2"})], "tool_use"),
@@ -104,7 +104,7 @@ class TestHappyPath:
 
     def test_state_amnesia_scores_a_correct_recall_through_the_adapter(self) -> None:
         task = find_and_synthesise(3)
-        codeword = task.planted_codeword
+        codeword = task.planted_codewords[0]
         client, _ = _client(
             _Response([_tool_block("c1", "lookup", {"topic": "topic_1"})], "tool_use"),
             _Response([_tool_block("c2", "lookup", {"topic": "topic_2"})], "tool_use"),
