@@ -69,17 +69,24 @@ class FindAndSynthesise:
         self._planted_codeword: str = _random_codeword(rng)
 
         self.system_prompt = (
-            "You are a research assistant. Use the `lookup` tool to retrieve the "
-            f"fact for each of the {n} topics the user gives you, in order. "
+            "You are a research assistant.\n\n"
+            "OUTPUT FORMAT (must be followed every single turn): every text "
+            f"response you produce must end with the literal marker "
+            f"{_INSTRUCTION_DECAY_MARKER} on its own line. This applies to "
+            "every assistant message that contains any text, no matter how "
+            "short. The marker is how the system detects that your reply is "
+            "complete; do not omit it.\n\n"
+            "Example of a correctly formatted assistant response:\n"
+            "  Looking up topic_1 now.\n"
+            f"  {_INSTRUCTION_DECAY_MARKER}\n\n"
+            f"TASK: Use the `lookup` tool to retrieve the fact for each of the "
+            f"{n} topics the user gives you, in order. Before every tool call, "
+            "briefly state in one short sentence what you are about to do. "
             "When the environment asks you to remember something, hold it. "
             "When you are asked a recall question, answer it in plain text "
             "before making any further tool calls. After all topics have been "
             "looked up, call `submit_summary` with a brief synthesis to end "
-            "the task. "
-            "Before every tool call, briefly state in one short sentence what "
-            f"you are about to do. End every text response you make with the "
-            f"marker '{_INSTRUCTION_DECAY_MARKER}' on its own at the end so the "
-            "system can detect when your reply is complete."
+            "the task."
         )
         self.initial_user_message = (
             f"Please research these {n} topics, in order: "
