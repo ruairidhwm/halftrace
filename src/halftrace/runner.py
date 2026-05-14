@@ -22,7 +22,13 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict
 
 from halftrace.fit import Halftrace, fit_halftrace
-from halftrace.probes import Score, instruction_decay, state_amnesia
+from halftrace.probes import (
+    Score,
+    instruction_decay,
+    narration_substitution,
+    state_amnesia,
+    tool_repetition,
+)
 from halftrace.probes.base import Probe
 from halftrace.tasks import find_and_synthesise
 from halftrace.trajectory import Trajectory
@@ -33,6 +39,8 @@ ProgressFn = Callable[[str], None]
 PROBES: dict[str, Probe] = {
     "state_amnesia": state_amnesia,
     "instruction_decay": instruction_decay,
+    "tool_repetition": tool_repetition,
+    "narration_substitution": narration_substitution,
 }
 
 _PRICING_PER_M_TOKENS: dict[str, tuple[float, float]] = {

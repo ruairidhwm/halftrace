@@ -1,7 +1,14 @@
 """halftrace: diagnostics for agent loops."""
 
 from halftrace.fit import Halftrace, fit_halftrace
-from halftrace.probes import Probe, Score, instruction_decay, state_amnesia
+from halftrace.probes import (
+    Probe,
+    Score,
+    instruction_decay,
+    narration_substitution,
+    state_amnesia,
+    tool_repetition,
+)
 from halftrace.tasks import FindAndSynthesise, Task, ToolResponse, ToolSpec, find_and_synthesise
 from halftrace.trajectory import (
     Role,
@@ -30,5 +37,7 @@ __all__ = [
     "find_and_synthesise",
     "fit_halftrace",
     "instruction_decay",
+    "narration_substitution",
     "state_amnesia",
+    "tool_repetition",
 ]
