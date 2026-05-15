@@ -47,10 +47,16 @@ PROBES: dict[str, Probe] = {
 }
 
 _PRICING_PER_M_TOKENS: dict[str, tuple[float, float]] = {
+    # Anthropic
     "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
+    # OpenAI (approximate; check current rates against your bill)
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
 }
 
 
@@ -184,13 +190,13 @@ def _default_trial(
     n_plants: int,
     discovery: bool,
 ) -> TrialFn:
-    from halftrace.adapters import run_anthropic_task
+    adapter = _select_adapter(model)
 
     def trial(n: int, rep: int) -> tuple[Trajectory, dict[str, Score]]:
         task = find_and_synthesise(
             n, seed=rep, n_plants=n_plants, discovery=discovery
         )
-        trajectory = run_anthropic_task(
+        trajectory = adapter(
             task,
             model=model,
             max_tokens=max_tokens,
@@ -201,6 +207,21 @@ def _default_trial(
         return trajectory, scores
 
     return trial
+
+
+def _select_adapter(model: str) -> Any:
+    """Pick the right adapter based on the model-name prefix."""
+    if model.startswith("claude-"):
+        from halftrace.adapters import run_anthropic_task
+
+        return run_anthropic_task
+    if model.startswith("gpt-"):
+        from halftrace.adapters import run_openai_task
+
+        return run_openai_task
+    raise ValueError(
+        f"Unknown provider for model {model!r}; expected a 'claude-*' or 'gpt-*' prefix."
+    )
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -222,7 +243,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     pilot.add_argument(
         "--model",
         default="claude-sonnet-4-6",
-        help="Anthropic model ID (default: claude-sonnet-4-6).",
+        help=(
+            "Model ID. Anthropic (claude-*) and OpenAI (gpt-*) are supported; "
+            "the runner dispatches to the right adapter based on the prefix. "
+            "Default: claude-sonnet-4-6."
+        ),
     )
     pilot.add_argument(
         "--n",

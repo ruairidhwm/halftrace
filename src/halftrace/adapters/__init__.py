@@ -9,5 +9,14 @@ from halftrace.adapters.anthropic_adapter import (
     DEFAULT_ANTHROPIC_MODEL,
     run_anthropic_task,
 )
+from halftrace.adapters.openai_adapter import (
+    DEFAULT_OPENAI_MODEL,
+    run_openai_task,
+)
 
-__all__ = ["DEFAULT_ANTHROPIC_MODEL", "run_anthropic_task"]
+__all__ = [
+    "DEFAULT_ANTHROPIC_MODEL",
+    "DEFAULT_OPENAI_MODEL",
+    "run_anthropic_task",
+    "run_openai_task",
+]
