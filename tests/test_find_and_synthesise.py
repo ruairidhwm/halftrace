@@ -137,6 +137,81 @@ class TestLookupHandling:
         assert "topic" in response.result.lower()
 
 
+class TestDiscoveryMode:
+    """The adversarial discovery variant: agent must track its own seen list."""
+
+    def test_discovery_exposes_a_discover_next_tool(self) -> None:
+        task = find_and_synthesise(5, discovery=True)
+        names = {spec.name for spec in task.tool_specs}
+        assert names == {"lookup", "discover_next", "submit_summary"}
+
+    def test_sequential_does_not_expose_discover_next(self) -> None:
+        task = find_and_synthesise(5)
+        names = {spec.name for spec in task.tool_specs}
+        assert "discover_next" not in names
+
+    def test_initial_user_message_does_not_list_topics_in_discovery_mode(self) -> None:
+        task = find_and_synthesise(5, discovery=True)
+        # Sanity: the sequential message lists topic_1..topic_N
+        sequential = find_and_synthesise(5).initial_user_message
+        assert "topic_1" in sequential
+        # The discovery message must not pre-leak the topics
+        assert "topic_1" not in task.initial_user_message
+
+    def test_discover_next_returns_a_topic_and_validates_seen(self) -> None:
+        task = find_and_synthesise(5, discovery=True)
+        response = task.handle_tool_call("discover_next", {"seen": []})
+        assert not response.is_error
+        # The revealed topic is one of the configured topic names
+        assert any(t in response.result for t in task.topics)
+
+    def test_discover_next_with_incorrect_seen_returns_error(self) -> None:
+        task = find_and_synthesise(5, discovery=True)
+        first = task.handle_tool_call("discover_next", {"seen": []})
+        # Pull the revealed topic out of the result text
+        revealed = next(t for t in task.topics if t in first.result)
+        # Now intentionally lie about what's been seen
+        bad = task.handle_tool_call("discover_next", {"seen": ["topic_does_not_exist"]})
+        assert bad.is_error
+        assert "missing" in bad.result.lower() or "unexpected" in bad.result.lower()
+        # Sanity: passing the correct seen list afterwards still works
+        ok = task.handle_tool_call("discover_next", {"seen": [revealed]})
+        assert not ok.is_error
+
+    def test_first_discover_next_carries_plant_annotation(self) -> None:
+        task = find_and_synthesise(5, discovery=True, n_plants=1)
+        response = task.handle_tool_call("discover_next", {"seen": []})
+        annotation = response.annotations.get("state_amnesia")
+        assert annotation is not None
+        assert annotation["role"] == "plant"
+        assert annotation["fact"] == task.planted_codewords[0]
+
+    def test_done_response_carries_recall_annotation(self) -> None:
+        task = find_and_synthesise(3, discovery=True, n_plants=1)
+        seen: list[str] = []
+        for _ in range(task.n):
+            response = task.handle_tool_call("discover_next", {"seen": seen})
+            revealed = next(t for t in task.topics if t in response.result)
+            seen.append(revealed)
+        # Now ask once more — should return DONE + recall
+        final = task.handle_tool_call("discover_next", {"seen": seen})
+        assert "DONE" in final.result
+        annotation = final.annotations.get("state_amnesia")
+        assert annotation is not None
+        assert annotation["role"] == "recall"
+        assert annotation["fact_ids"] == ["password_1"]
+
+    def test_lookup_in_discovery_mode_has_no_plant_or_recall(self) -> None:
+        task = find_and_synthesise(3, discovery=True)
+        # Discover a topic
+        response = task.handle_tool_call("discover_next", {"seen": []})
+        revealed = next(t for t in task.topics if t in response.result)
+        # Lookup should return only the fact, no plant/recall annotations
+        lookup_response = task.handle_tool_call("lookup", {"topic": revealed})
+        assert not lookup_response.is_error
+        assert lookup_response.annotations == {}
+
+
 class TestSubmitAndDone:
     """submit_summary ends the task; nothing else does."""
 

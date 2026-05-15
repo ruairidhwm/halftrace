@@ -179,11 +179,14 @@ def _default_trial(
     *,
     serial: bool,
     n_plants: int,
+    discovery: bool,
 ) -> TrialFn:
     from halftrace.adapters import run_anthropic_task
 
     def trial(n: int, rep: int) -> tuple[Trajectory, dict[str, Score]]:
-        task = find_and_synthesise(n, seed=rep, n_plants=n_plants)
+        task = find_and_synthesise(
+            n, seed=rep, n_plants=n_plants, discovery=discovery
+        )
         trajectory = run_anthropic_task(
             task,
             model=model,
@@ -246,6 +249,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--discovery",
+        action="store_true",
+        help=(
+            "Use adversarial discovery mode: agent does not get the topic list "
+            "upfront and must maintain its own 'seen' state via discover_next."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the plan and exit without making API calls.",
@@ -275,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         args.max_iterations,
         serial=args.serial,
         n_plants=args.n_plants,
+        discovery=args.discovery,
     )
     result = run_pilot(
         model=args.model,

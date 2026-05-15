@@ -301,6 +301,14 @@ class TestArgParse:
         args = parse_args(["--n-plants", "5"])
         assert args.n_plants == 5
 
+    def test_discovery_flag_is_parsed(self) -> None:
+        args = parse_args(["--discovery"])
+        assert args.discovery
+
+    def test_discovery_defaults_to_false(self) -> None:
+        args = parse_args([])
+        assert not args.discovery
+
     def test_overrides_are_applied(self) -> None:
         args = parse_args(
             [
