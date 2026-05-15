@@ -7,30 +7,39 @@ laid out in `HYPOTHESES.md`. They are not the full study.
 
 ## Summary
 
-Eleven pilot runs against the Anthropic API (~60 trajectories, $8.26 of
+Twelve pilot runs against the Anthropic API (~64 trajectories, $8.77 of
 spend) end-to-end validated the pipeline: `Task` → adapter → `Trajectory`
 → probe → `fit_halftrace` → CLI. All four `find_and_synthesise` probes
 are implemented (`state_amnesia`, `instruction_decay`, `tool_repetition`,
 `narration_substitution`) and have been measured against `claude-sonnet-4-6`
 and `claude-haiku-4-5` across N values from 5 to 200, including multi-plant
-state_amnesia variants and three different `instruction_decay` rule designs.
+state_amnesia variants, three different `instruction_decay` rule designs,
+and an adversarial discovery-mode task that forces the agent to maintain
+its own `seen` list.
 
 **No probe produced a halftrace in any configuration.** This is itself the
 finding worth recording. The consistent pattern across the design space:
 
 - `state_amnesia`, `tool_repetition`, `narration_substitution`: flat 1.0
-  everywhere — the failure modes are not exercised by `find_and_synthesise`
-  in the {5..200} range on modern Claude.
-- `instruction_decay`: **bimodal coinflip per trajectory**, not smooth decay.
-  The agent either commits to the rule for the whole trajectory or
-  abandons it from turn 4 onward, with the choice approximately a coinflip.
-  This held across three rule designs (buried marker, front-loaded marker,
-  incrementing counter).
+  everywhere — including under multi-plant retention, doubled trajectory
+  length, and adversarial state-tracking pressure. The failure modes are
+  not exercised by *any* version of `find_and_synthesise` we tried.
+- `instruction_decay`: **categorical, not gradient.** Three patterns
+  observed depending on rule and task variant, but all categorical:
+  - *Bimodal commit-or-abandon* (sequential task, marker or counter rules):
+    coinflip per trajectory, no N dependence.
+  - *Categorical alternation* (discovery-mode task, counter rule): the
+    agent applies the rule to one turn-type and drops it on another,
+    yielding a 1/2 compliance ratio that is independent of N.
 
-**Modern Claude on simple, well-specified agentic tasks does not decay
-gradually — it commits or it doesn't.** The halftrace concept as defined
-in `HYPOTHESES.md` assumes smooth degradation, which is the wrong shape
-for the failure modes we observe.
+**Modern Claude (Sonnet 4.6) treats format rules as *categorical
+decisions per turn-type*, not as gradients over trajectory length.**
+Compliance is determined by the agent's classification of "which kind of
+turn this is", not by accumulated context pressure. Across twelve pilots,
+~64 trajectories, three rule designs, two task modes, two models, and N
+from 5 to 200, we have observed zero instances of gradual decay on any
+probe. The halftrace concept as defined in `HYPOTHESES.md` assumes smooth
+degradation, which is the wrong shape for the failure modes we observe.
 
 ## Pipeline status
 
@@ -102,7 +111,7 @@ turn always violates the rule; after the first tool-result round trip,
 the agent either commits to the rule for the rest of the trajectory or
 abandons it entirely. Haiku 4.5 ignored the rule completely at every N.
 
-#### Rule v3: incrementing counter `STATUS: <N>`
+#### Rule v3: incrementing counter `STATUS: <N>` (sequential task)
 
 Hypothesis: a static literal is too cheap to drop or maintain; an
 incrementing counter forces state-tracking and should produce gradual
@@ -125,33 +134,60 @@ A single earlier pilot at N=10 with 3 reps happened to draw three
 halftrace estimate of 8.06 with a degenerate CI — instructive about how
 easily under-sampled bimodal data masquerades as a decay curve.
 
-**Implication.** Across three rule designs and two models, instruction
-adherence on `find_and_synthesise` is a coinflip-per-trajectory, not a
-gradual decay. The probe is mechanically sound — it correctly captures
-adherence — but the failure mode is binary: either the agent commits to
-the rule after its first tool-result round trip or it never engages.
-"Halftrace" as currently defined assumes smoothness that this failure
-shape does not have.
+#### Rule v3 + discovery-mode task: categorical alternation
+
+Same counter rule, but using the discovery-mode variant of the task: the
+agent must call `discover_next(seen=[...])` to reveal each topic before
+looking it up, doubling the trajectory length and adding bookkeeping
+pressure. Tested at N={10, 25} with 2 reps each on Sonnet 4.6.
+
+| N | rep=0 | rep=1 | trajectory length |
+| --- | --- | --- | --- |
+| 10 | 0.545 | 0.545 | 22 assistant turns |
+| 25 | 0.519 | 1.000 | 52 assistant turns |
+
+The intermediate scores (0.545, 0.519) are not partial decay — they
+encode a **stable alternating pattern**: bit-string `1010101010...11`
+across all observed turns, where the agent applies `STATUS:` to
+`discover_next` narration turns and drops it on the immediately-
+following `lookup` narration turns. The compliance fraction converges
+to 1/2 asymptotically (12/22 at N=10, 27/52 at N=25) because exactly
+half the text turns are each type. Same model, same rule, same prompt:
+the categorisation is stable.
+
+Example: at the start of an N=25 trajectory the agent emits
+`"STATUS: 1\nI'll start by discovering the first topic..."` (compliant)
+and one turn later `"Noted! Password #1: MOOSE65 — I'll remember this.\nNow I'll look up topic_25."`
+(non-compliant). The first is a discovery announcement; the second is a
+lookup acknowledgement. The agent treats them as different rule classes.
+
+**Implication.** Across three rule designs, two task variants, and two
+models, instruction adherence on `find_and_synthesise` is *categorical
+per turn-type*, never gradual. The agent classifies turn function and
+applies rules conditionally — but consistently within each class. The
+probe is mechanically sound; the "halftrace" notion that compliance
+gradually erodes with context does not match the observed behaviour.
 
 ### `tool_repetition`
 
 Probe scores the fraction of tool calls that are unique by `(name, args)`.
-Re-scored on every existing pilot trajectory (60 total across all pilot
-files): **score 1.0 in every cell.** Sonnet 4.6 and Haiku 4.5 never
-repeated a tool call in any trajectory.
+Re-scored on every pilot trajectory (~64 total): **score 1.0 in every cell.**
+Sonnet 4.6 and Haiku 4.5 never repeated a tool call in any trajectory,
+including the discovery-mode pilots where the agent had to maintain its
+own `seen` list across 22-52 turns.
 
-**Implication.** `find_and_synthesise` gives the agent the complete topic
-list upfront and instructs sequential lookup. There is no natural
-opportunity for repetition. The probe is mechanically correct; the task
-forecloses the failure mode.
+**Implication.** `find_and_synthesise` (sequential *or* discovery) does
+not give Sonnet 4.6 enough cognitive pressure to repeat. The probe is
+mechanically correct; even adversarial state-tracking is within the
+model's capability at this N range.
 
 ### `narration_substitution`
 
 Probe flags assistant text turns that mention a tool name without emitting
-a corresponding `tool_call` in the same turn. Re-scored on every existing
-pilot trajectory: **score 1.0 in every cell.** With `--serial`, every
+a corresponding `tool_call` in the same turn. Re-scored on every pilot
+trajectory: **score 1.0 in every cell.** With `--serial`, every
 text-bearing assistant turn also carries a tool call, so the substitution
-signature never appears.
+signature never appears. Discovery mode does not change this.
 
 **Implication.** Same as `tool_repetition`: the task design forecloses
 the failure mode. To elicit substitution we would need a task where the
@@ -215,41 +251,83 @@ within-rep "determinism" as a draw, not a guarantee.
 | Multi-plant | Sonnet 4.6, k=5 plants, N={10,25,100} | $1.393 |
 | Counter | Sonnet 4.6, counter rule, reps=3 | $0.436 |
 | Counter-scan | Sonnet 4.6, counter rule, fine N, reps=2 | $0.610 |
-| **Total** | | **$8.26** |
+| Discovery | Sonnet 4.6, discovery-mode, counter rule, N={10,25}, reps=2 | $0.507 |
+| **Total** | | **$8.77** |
 
 Well under the £200 cap from `HYPOTHESES.md` § Stopping conditions.
 Per-trajectory reference cost at N=200 with caching: ~$0.45 on Sonnet 4.6.
 
 ## What's needed before the full study runs
 
-The pilot phase has done its job: it surfaced concrete design issues
-that make running the pre-registered 120-trajectory study a poor use of
-budget without first addressing the following.
+The pilot phase has done its job: it has shown that the failure modes
+the project was originally designed to measure do not manifest as
+gradient decay on modern Claude in any agentic task structure we tried.
+The pre-registered 120-trajectory study would, on current evidence,
+produce flat 1.0 cells and zero halftraces — running it is not worth
+the budget without first addressing the framing issue.
 
-1. **Task redesign is the real bottleneck, not probe design.** All four
-   implemented probes are mechanically correct. Three of them score 1.0
-   universally because `find_and_synthesise` does not elicit the failure
-   modes they measure. The fourth (`instruction_decay`) is bimodal
-   because the task is short enough and well-specified enough that the
-   agent's "comply or not" decision is taken once and stable. A task
-   that elicits decay must be qualitatively different: ambiguous
-   instructions, partial information, conflicting constraints, or
-   open-ended completion criteria.
-2. **The halftrace concept may need refinement for modern models.** The
-   "smooth decay" assumption fits older or weaker models that gradually
-   forget. Modern frontier Claude exhibits a commit-or-don't pattern on
-   short, well-specified tasks. A useful diagnostic for this regime
-   measures *commit probability* (fraction of trajectories that follow
-   the rule end-to-end), not *decay rate*.
-3. **Implement `premature_termination`** to complete the probe set, and
-   re-score existing trajectories with it. If it shows 1.0 universally
-   too, the task-redesign claim is unambiguously the only path forward.
-4. **OpenAI adapter** for the GPT-4o / GPT-4.1 arms of the study. Mechanically
-   a port of the Anthropic adapter; only worth building once tasks elicit
-   decay on Anthropic models.
-5. **Pre-register the post-pilot probe/task changes.** The original
-   hypotheses assumed smooth decay; what we found is genuinely different
-   and merits an updated pre-registration before scaling.
+1. **The halftrace concept itself needs reframing.** "Smooth decay"
+   fits older or weaker models that gradually forget under context
+   pressure. Modern frontier Claude exhibits *categorical* compliance
+   patterns: commit-or-abandon at the trajectory level, or stable
+   per-turn-type rule application within a trajectory. A useful
+   diagnostic for this regime measures the *shape* of the compliance
+   pattern (perfect / bimodal / categorical / decaying), not a single
+   halftrace number that would be undefined for three of those four
+   shapes. See "Tool redesign" below.
+2. **Task design has a hard ceiling on this model class.** We tried
+   sequential, multi-plant, and discovery-mode variants of
+   `find_and_synthesise`. Each added cognitive pressure; none produced
+   gradual decay on `state_amnesia`, `tool_repetition`, or
+   `narration_substitution`. To elicit those failure modes on modern
+   Claude likely requires a qualitatively different task (open-ended
+   completion criteria, ambiguous information, conflicting constraints)
+   — a substantial design investment that should follow rather than
+   precede the framework reframe.
+3. **Implement `premature_termination`** to complete the probe set. On
+   current evidence it will score 1.0 universally on existing data,
+   reinforcing the task-foreclosure claim.
+4. **Cross-model comparison via the same framework.** Once the tool is
+   reframed around *compliance shape* rather than *halftrace*, Haiku
+   4.5 / Opus 4.7 / GPT comparisons become meaningful — they measure
+   which shapes each model produces on which rules.
+
+## Tool redesign
+
+The empirical findings argue for a specific reframe of what halftrace
+*is* and what it *outputs*. The components that survive intact:
+
+- `Trajectory`, `Probe`, `Score` — per-trajectory scoring is sound.
+- The four probes themselves — they correctly measure compliance per
+  trajectory.
+- Adapter, task scaffolding, CLI runner — the data-collection pipeline
+  works.
+
+The component that does not survive: `fit_halftrace` and its halftrace
+output. Linear interpolation over per-N means assumes a monotone curve,
+which the data does not show. In its place, a useful diagnostic emits
+a *compliance profile* per (agent, task, probe) cell:
+
+- **Shape classification.** Detect whether the per-N scores look like
+  *perfect*, *abandoned*, *bimodal*, *categorical-partial*, *gradient*
+  (the case the original framework assumed), or *unclassified*.
+- **Per-N mean and within-N variance.** Variance above ~0.3 within a
+  cell is the bimodal signature; below ~0.05 with intermediate means
+  is the categorical signature.
+- **Per-turn-type breakdown.** For `instruction_decay`-like probes,
+  partition compliance by which kind of turn produced it (lookup vs
+  discovery, action vs acknowledgment, etc.). The categorical
+  alternation finding emerges directly from this.
+- **Commit probability.** Fraction of trajectories that follow the
+  rule end-to-end. Replaces "halftrace" as the headline scalar for
+  bimodal probes.
+
+This reframe keeps the entire data-collection pipeline intact, replaces
+the curve-fitting layer with a classification + per-segment-summary
+layer, and makes the diagnostic actually useful for modern models on
+agentic tasks: it tells the agent developer *which shape* their model's
+compliance has on a given rule, not a single number that hides the
+underlying pattern.
 
 ## What worked first try
 
