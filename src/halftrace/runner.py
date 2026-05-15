@@ -22,6 +22,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
+from halftrace.compare import ProbeComparison, compare_profiles
 from halftrace.diagnose import diagnose
 from halftrace.fit import ComplianceProfile, analyse_compliance
 from halftrace.probes import (
@@ -303,6 +304,44 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
 
+    compare = sub.add_parser(
+        "compare",
+        help=(
+            "Compare two sets of trajectory logs (e.g. before / after a "
+            "prompt change) and report per-probe deltas."
+        ),
+    )
+    compare.add_argument(
+        "--before", type=Path, required=True, help="JSONL path of baseline logs."
+    )
+    compare.add_argument(
+        "--after", type=Path, required=True, help="JSONL path of new logs."
+    )
+    compare.add_argument(
+        "--format",
+        choices=["anthropic", "openai"],
+        default="anthropic",
+        help="Input message format (default: anthropic).",
+    )
+    compare.add_argument(
+        "--commit-threshold",
+        type=float,
+        default=0.95,
+        help=(
+            "Score at which a trajectory counts as having committed to a "
+            "rule (default: 0.95). Used to compute commit_probability."
+        ),
+    )
+    compare.add_argument(
+        "--delta-threshold",
+        type=float,
+        default=0.05,
+        help=(
+            "Minimum commit_probability change to classify as improved "
+            "or regressed (default: 0.05)."
+        ),
+    )
+
     return parser.parse_args(argv)
 
 
@@ -312,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_pilot_command(args)
     if args.command == "analyse":
         return _run_analyse_command(args)
+    if args.command == "compare":
+        return _run_compare_command(args)
     raise AssertionError(f"unknown command {args.command!r}")  # argparse should catch
 
 
@@ -388,33 +429,72 @@ def _print_profile_with_diagnosis(probe_name: str, profile: ComplianceProfile) -
 
 
 def _run_analyse_command(args: argparse.Namespace) -> int:
-    from halftrace.ingest import from_anthropic_messages, from_openai_messages
-
-    parser_fn = (
-        from_anthropic_messages
-        if args.format == "anthropic"
-        else from_openai_messages
-    )
-
-    trajectories: list[Trajectory] = []
-    with args.input.open() as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            payload = cast("dict[str, Any]", json.loads(line))
-            trajectories.append(parser_fn(payload))
-
+    trajectories = _load_trajectories(args.input, args.format)
     print(
         f"Analysing {len(trajectories)} trajectories from {args.input} "
         f"({args.format} format)",
         file=sys.stderr,
     )
 
-    # Score each probe across every trajectory, then classify the shape of the
-    # resulting distribution. With no explicit N axis we treat all trajectories
-    # as one cell; shape classification reduces to perfect/abandoned/bimodal/
-    # categorical/unclassified.
+    profiles = _profile_trajectories(trajectories, args.commit_threshold)
+    print("", file=sys.stderr)
+    for probe_name in PROBES:
+        profile = profiles.get(probe_name)
+        if profile is None:
+            print(
+                f"{probe_name}: no observations (no annotations in any trajectory)",
+                file=sys.stderr,
+            )
+            continue
+        _print_profile_with_diagnosis(probe_name, profile)
+
+    return 0
+
+
+def _run_compare_command(args: argparse.Namespace) -> int:
+    before_traj = _load_trajectories(args.before, args.format)
+    after_traj = _load_trajectories(args.after, args.format)
+    print(
+        f"Comparing {len(before_traj)} before-trajectories vs "
+        f"{len(after_traj)} after-trajectories ({args.format} format)",
+        file=sys.stderr,
+    )
+
+    before_profiles = _profile_trajectories(before_traj, args.commit_threshold)
+    after_profiles = _profile_trajectories(after_traj, args.commit_threshold)
+    comparisons = compare_profiles(
+        before_profiles,
+        after_profiles,
+        delta_threshold=args.delta_threshold,
+    )
+
+    print("", file=sys.stderr)
+    for cmp in comparisons:
+        _print_comparison(cmp)
+
+    return 0
+
+
+def _load_trajectories(path: Path, fmt: str) -> list[Trajectory]:
+    from halftrace.ingest import from_anthropic_messages, from_openai_messages
+
+    parser_fn = from_anthropic_messages if fmt == "anthropic" else from_openai_messages
+    trajectories: list[Trajectory] = []
+    with path.open() as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            payload = cast("dict[str, Any]", json.loads(line))
+            trajectories.append(parser_fn(payload))
+    return trajectories
+
+
+def _profile_trajectories(
+    trajectories: list[Trajectory],
+    commit_threshold: float,
+) -> dict[str, ComplianceProfile | None]:
+    """Score every probe across the given trajectories and emit a profile per probe."""
     scores_by_probe: dict[str, list[float]] = {name: [] for name in PROBES}
     for trajectory in trajectories:
         for probe_name, probe in PROBES.items():
@@ -425,23 +505,46 @@ def _run_analyse_command(args: argparse.Namespace) -> int:
             if score.value is not None:
                 scores_by_probe[probe_name].append(score.value)
 
-    print("", file=sys.stderr)
+    profiles: dict[str, ComplianceProfile | None] = {}
     for probe_name in PROBES:
         scores = scores_by_probe[probe_name]
         if not scores:
-            print(
-                f"{probe_name}: no observations (no annotations in any trajectory)",
-                file=sys.stderr,
-            )
+            profiles[probe_name] = None
             continue
-        profile = analyse_compliance(
+        profiles[probe_name] = analyse_compliance(
             {0: scores},
             probe=probe_name,
-            commit_threshold=args.commit_threshold,
+            commit_threshold=commit_threshold,
         )
-        _print_profile_with_diagnosis(probe_name, profile)
+    return profiles
 
-    return 0
+
+def _print_comparison(cmp: ProbeComparison) -> None:
+    icon = {
+        "improved": "[+]",
+        "regressed": "[-]",
+        "unchanged": "[ ]",
+        "appeared": "[+]",
+        "disappeared": "[-]",
+        "missing": "[ ]",
+    }[cmp.direction]
+
+    def fmt(p: ComplianceProfile | None) -> str:
+        if p is None:
+            return "none"
+        return f"shape={p.shape} c={p.commit_probability:.2f}"
+
+    delta_str = ""
+    if cmp.commit_probability_delta is not None:
+        delta_str = f"  Δcommit={cmp.commit_probability_delta:+.2f}"
+    shape_str = ""
+    if cmp.shape_changed and cmp.before is not None and cmp.after is not None:
+        shape_str = f"  shape: {cmp.before.shape} → {cmp.after.shape}"
+    line = (
+        f"{icon} {cmp.probe}: {fmt(cmp.before)} → {fmt(cmp.after)}  "
+        f"({cmp.direction}){delta_str}{shape_str}"
+    )
+    print(line, file=sys.stderr)
 
 
 if __name__ == "__main__":
