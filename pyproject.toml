@@ -1,12 +1,12 @@
 [project]
 name = "halftrace"
-version = "0.0.1"
-description = "Diagnostics for agent loops. Measure how fast each capability decays over long trajectories."
+version = "0.1.0"
+description = "Diagnose how your agent's compliance with rules varies across trajectory length."
 readme = "README.md"
 authors = [{ name = "Ruairidh Wynne-McCorry" }]
 license = { text = "MIT" }
 requires-python = ">=3.11"
-keywords = ["llm", "agents", "evaluation", "diagnostics", "tool-use"]
+keywords = ["llm", "agents", "evaluation", "diagnostics", "tool-use", "compliance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

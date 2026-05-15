@@ -208,8 +208,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         prog="halftrace",
         description=(
             "Halftrace: diagnose how your agent's compliance with rules varies "
-            "across trajectory length. Two subcommands: `pilot` (run new "
-            "trajectories against an LLM) and `analyse` (ingest existing logs)."
+            "across trajectory length. Three subcommands: `pilot` (run new "
+            "trajectories against an LLM), `analyse` (ingest existing logs), "
+            "and `compare` (diff before/after a prompt change)."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
