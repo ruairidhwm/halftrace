@@ -181,7 +181,7 @@ def run_pilot(
     )
 
 
-def _default_trial(
+def default_trial(
     model: str,
     max_tokens: int,
     max_iterations: int,
@@ -396,7 +396,7 @@ def _run_pilot_command(args: argparse.Namespace) -> int:
             print(f"  N={n} rep={rep}", file=sys.stderr)
         return 0
 
-    trial = _default_trial(
+    trial = default_trial(
         args.model,
         args.max_tokens,
         args.max_iterations,
