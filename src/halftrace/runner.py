@@ -22,6 +22,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
+from halftrace.diagnose import diagnose
 from halftrace.fit import ComplianceProfile, analyse_compliance
 from halftrace.probes import (
     Score,
@@ -362,17 +363,28 @@ def _run_pilot_command(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             continue
-        line = (
-            f"{probe_name}: shape={profile.shape}  "
-            f"commit_p={profile.commit_probability:.2f}"
-        )
-        if profile.shape == "gradient" and profile.halftrace is not None:
-            line += f"  halftrace={profile.halftrace:.2f}"
-        elif profile.shape == "gradient":
-            line += "  halftrace=undefined (no crossing in range)"
-        print(line, file=sys.stderr)
+        _print_profile_with_diagnosis(probe_name, profile)
 
     return 0
+
+
+def _print_profile_with_diagnosis(probe_name: str, profile: ComplianceProfile) -> None:
+    line = (
+        f"{probe_name}: shape={profile.shape}  "
+        f"commit_p={profile.commit_probability:.2f}"
+    )
+    if profile.shape == "gradient" and profile.halftrace is not None:
+        line += f"  halftrace={profile.halftrace:.2f}"
+    elif profile.shape == "gradient":
+        line += "  halftrace=undefined (no crossing in range)"
+    print(line, file=sys.stderr)
+    if profile.shape == "perfect":
+        return
+    diagnosis = diagnose(profile)
+    print(f"  why:  {diagnosis.cause}", file=sys.stderr)
+    print("  try:", file=sys.stderr)
+    for suggestion in diagnosis.suggestions:
+        print(f"    - {suggestion}", file=sys.stderr)
 
 
 def _run_analyse_command(args: argparse.Namespace) -> int:
@@ -427,12 +439,7 @@ def _run_analyse_command(args: argparse.Namespace) -> int:
             probe=probe_name,
             commit_threshold=args.commit_threshold,
         )
-        line = (
-            f"{probe_name}: shape={profile.shape}  "
-            f"commit_p={profile.commit_probability:.2f}  "
-            f"(n={len(scores)})"
-        )
-        print(line, file=sys.stderr)
+        _print_profile_with_diagnosis(probe_name, profile)
 
     return 0
 

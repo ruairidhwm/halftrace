@@ -1,5 +1,6 @@
 """halftrace: diagnostics for agent loops."""
 
+from halftrace.diagnose import Diagnosis, diagnose
 from halftrace.fit import ComplianceProfile, analyse_compliance
 from halftrace.ingest import from_anthropic_messages, from_openai_messages
 from halftrace.probes import (
@@ -23,6 +24,7 @@ __version__ = "0.0.1"
 
 __all__ = [
     "ComplianceProfile",
+    "Diagnosis",
     "FindAndSynthesise",
     "Probe",
     "Role",
@@ -36,6 +38,7 @@ __all__ = [
     "Turn",
     "__version__",
     "analyse_compliance",
+    "diagnose",
     "find_and_synthesise",
     "from_anthropic_messages",
     "from_openai_messages",
