@@ -1,6 +1,7 @@
 """halftrace: diagnostics for agent loops."""
 
 from halftrace.fit import ComplianceProfile, analyse_compliance
+from halftrace.ingest import from_anthropic_messages, from_openai_messages
 from halftrace.probes import (
     Probe,
     Score,
@@ -36,6 +37,8 @@ __all__ = [
     "__version__",
     "analyse_compliance",
     "find_and_synthesise",
+    "from_anthropic_messages",
+    "from_openai_messages",
     "instruction_decay",
     "narration_substitution",
     "state_amnesia",

@@ -288,10 +288,11 @@ class TestProgress:
 
 
 class TestArgParse:
-    """CLI argument parsing."""
+    """CLI argument parsing under the pilot subcommand."""
 
     def test_default_arguments(self) -> None:
-        args = parse_args([])
+        args = parse_args(["pilot"])
+        assert args.command == "pilot"
         assert args.model == "claude-sonnet-4-6"
         assert args.n == [5, 10, 25]
         assert args.reps == 3
@@ -301,24 +302,25 @@ class TestArgParse:
         assert args.n_plants == 1
 
     def test_serial_flag_is_parsed(self) -> None:
-        args = parse_args(["--serial"])
+        args = parse_args(["pilot", "--serial"])
         assert args.serial
 
     def test_n_plants_flag_is_parsed(self) -> None:
-        args = parse_args(["--n-plants", "5"])
+        args = parse_args(["pilot", "--n-plants", "5"])
         assert args.n_plants == 5
 
     def test_discovery_flag_is_parsed(self) -> None:
-        args = parse_args(["--discovery"])
+        args = parse_args(["pilot", "--discovery"])
         assert args.discovery
 
     def test_discovery_defaults_to_false(self) -> None:
-        args = parse_args([])
+        args = parse_args(["pilot"])
         assert not args.discovery
 
     def test_overrides_are_applied(self) -> None:
         args = parse_args(
             [
+                "pilot",
                 "--model",
                 "claude-opus-4-7",
                 "--n",
@@ -333,3 +335,100 @@ class TestArgParse:
         assert args.n == [5, 10]
         assert args.reps == 5
         assert args.dry_run
+
+
+class TestAnalyseEndToEnd:
+    """Drive the analyse subcommand through main() with a real input file."""
+
+    def test_analyse_reports_per_probe_shape(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from halftrace.runner import main
+
+        # Two trajectories: one with duplicate tool calls, one without
+        input_path = tmp_path / "logs.jsonl"
+        input_path.write_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "1",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": '{"x":1}',
+                                    },
+                                }
+                            ],
+                        },
+                        {"role": "tool", "tool_call_id": "1", "content": "ok"},
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "2",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": '{"x":1}',
+                                    },
+                                }
+                            ],
+                        },
+                    ]
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "3",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": '{"x":2}',
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+            + "\n"
+        )
+
+        rc = main(["analyse", "--input", str(input_path), "--format", "openai"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "tool_repetition" in captured.err
+        # Trajectory 1: score 0.5 (duplicate); trajectory 2: score 1.0 — bimodal-ish
+        assert "shape=" in captured.err
+
+
+class TestAnalyseSubcommand:
+    """CLI argument parsing for the analyse subcommand."""
+
+    def test_analyse_requires_input(self) -> None:
+        # argparse will exit non-zero when --input is missing
+        with pytest.raises(SystemExit):
+            parse_args(["analyse"])
+
+    def test_analyse_format_defaults_to_anthropic(self) -> None:
+        args = parse_args(["analyse", "--input", "logs.jsonl"])
+        assert args.command == "analyse"
+        assert args.format == "anthropic"
+        assert args.input == Path("logs.jsonl")
+
+    def test_analyse_openai_format(self) -> None:
+        args = parse_args(["analyse", "--input", "logs.jsonl", "--format", "openai"])
+        assert args.format == "openai"
+
+    def test_analyse_commit_threshold(self) -> None:
+        args = parse_args(
+            ["analyse", "--input", "logs.jsonl", "--commit-threshold", "0.8"]
+        )
+        assert args.commit_threshold == 0.8

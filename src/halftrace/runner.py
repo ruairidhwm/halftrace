@@ -204,35 +204,45 @@ def _default_trial(
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="halftrace",
-        description="Run a state_amnesia pilot across N values and fit a halftrace.",
+        description=(
+            "Halftrace: diagnose how your agent's compliance with rules varies "
+            "across trajectory length. Two subcommands: `pilot` (run new "
+            "trajectories against an LLM) and `analyse` (ingest existing logs)."
+        ),
     )
-    parser.add_argument(
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    pilot = sub.add_parser(
+        "pilot",
+        help="Run a new pilot sweep against the Anthropic API.",
+    )
+    pilot.add_argument(
         "--model",
         default="claude-sonnet-4-6",
         help="Anthropic model ID (default: claude-sonnet-4-6).",
     )
-    parser.add_argument(
+    pilot.add_argument(
         "--n",
         nargs="+",
         type=int,
         default=[5, 10, 25],
         help="N values to sweep (default: 5 10 25).",
     )
-    parser.add_argument(
+    pilot.add_argument(
         "--reps",
         type=int,
         default=3,
         help="Repetitions per N (default: 3).",
     )
-    parser.add_argument(
+    pilot.add_argument(
         "--output",
         type=Path,
         default=Path("results/pilot.jsonl"),
         help="JSONL output path (default: results/pilot.jsonl).",
     )
-    parser.add_argument("--max-tokens", type=int, default=4096)
-    parser.add_argument("--max-iterations", type=int, default=500)
-    parser.add_argument(
+    pilot.add_argument("--max-tokens", type=int, default=4096)
+    pilot.add_argument("--max-iterations", type=int, default=500)
+    pilot.add_argument(
         "--n-plants",
         type=int,
         default=1,
@@ -241,7 +251,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "Must be <= min(N) - 1 across all --n values."
         ),
     )
-    parser.add_argument(
+    pilot.add_argument(
         "--serial",
         action="store_true",
         help=(
@@ -249,7 +259,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "Required to exercise context decay over N tool-call rounds."
         ),
     )
-    parser.add_argument(
+    pilot.add_argument(
         "--discovery",
         action="store_true",
         help=(
@@ -257,17 +267,54 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "upfront and must maintain its own 'seen' state via discover_next."
         ),
     )
-    parser.add_argument(
+    pilot.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the plan and exit without making API calls.",
     )
+
+    analyse = sub.add_parser(
+        "analyse",
+        help="Analyse existing trajectory logs without hitting any API.",
+    )
+    analyse.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help=(
+            "Path to a JSONL file. Each line is one message payload in the "
+            "format selected by --format."
+        ),
+    )
+    analyse.add_argument(
+        "--format",
+        choices=["anthropic", "openai"],
+        default="anthropic",
+        help="Input message format (default: anthropic).",
+    )
+    analyse.add_argument(
+        "--commit-threshold",
+        type=float,
+        default=0.95,
+        help=(
+            "Score at which a trajectory counts as having committed to a "
+            "rule (default: 0.95). Used to compute commit_probability."
+        ),
+    )
+
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.command == "pilot":
+        return _run_pilot_command(args)
+    if args.command == "analyse":
+        return _run_analyse_command(args)
+    raise AssertionError(f"unknown command {args.command!r}")  # argparse should catch
 
+
+def _run_pilot_command(args: argparse.Namespace) -> int:
     plan = [(n, rep) for n in args.n for rep in range(args.reps)]
     print(
         f"Plan: {len(plan)} trajectories ({len(args.n)} N values x {args.reps} reps)",
@@ -323,6 +370,68 @@ def main(argv: list[str] | None = None) -> int:
             line += f"  halftrace={profile.halftrace:.2f}"
         elif profile.shape == "gradient":
             line += "  halftrace=undefined (no crossing in range)"
+        print(line, file=sys.stderr)
+
+    return 0
+
+
+def _run_analyse_command(args: argparse.Namespace) -> int:
+    from halftrace.ingest import from_anthropic_messages, from_openai_messages
+
+    parser_fn = (
+        from_anthropic_messages
+        if args.format == "anthropic"
+        else from_openai_messages
+    )
+
+    trajectories: list[Trajectory] = []
+    with args.input.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            payload = cast("dict[str, Any]", json.loads(line))
+            trajectories.append(parser_fn(payload))
+
+    print(
+        f"Analysing {len(trajectories)} trajectories from {args.input} "
+        f"({args.format} format)",
+        file=sys.stderr,
+    )
+
+    # Score each probe across every trajectory, then classify the shape of the
+    # resulting distribution. With no explicit N axis we treat all trajectories
+    # as one cell; shape classification reduces to perfect/abandoned/bimodal/
+    # categorical/unclassified.
+    scores_by_probe: dict[str, list[float]] = {name: [] for name in PROBES}
+    for trajectory in trajectories:
+        for probe_name, probe in PROBES.items():
+            try:
+                score = probe(trajectory)
+            except ValueError:
+                continue
+            if score.value is not None:
+                scores_by_probe[probe_name].append(score.value)
+
+    print("", file=sys.stderr)
+    for probe_name in PROBES:
+        scores = scores_by_probe[probe_name]
+        if not scores:
+            print(
+                f"{probe_name}: no observations (no annotations in any trajectory)",
+                file=sys.stderr,
+            )
+            continue
+        profile = analyse_compliance(
+            {0: scores},
+            probe=probe_name,
+            commit_threshold=args.commit_threshold,
+        )
+        line = (
+            f"{probe_name}: shape={profile.shape}  "
+            f"commit_p={profile.commit_probability:.2f}  "
+            f"(n={len(scores)})"
+        )
         print(line, file=sys.stderr)
 
     return 0
