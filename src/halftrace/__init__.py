@@ -1,6 +1,6 @@
 """halftrace: diagnostics for agent loops."""
 
-from halftrace.fit import Halftrace, fit_halftrace
+from halftrace.fit import ComplianceProfile, analyse_compliance
 from halftrace.probes import (
     Probe,
     Score,
@@ -21,8 +21,8 @@ from halftrace.trajectory import (
 __version__ = "0.0.1"
 
 __all__ = [
+    "ComplianceProfile",
     "FindAndSynthesise",
-    "Halftrace",
     "Probe",
     "Role",
     "Score",
@@ -34,8 +34,8 @@ __all__ = [
     "Trajectory",
     "Turn",
     "__version__",
+    "analyse_compliance",
     "find_and_synthesise",
-    "fit_halftrace",
     "instruction_decay",
     "narration_substitution",
     "state_amnesia",

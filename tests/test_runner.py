@@ -173,10 +173,12 @@ class TestRunPilotOutput:
         assert out.exists()
 
 
-class TestHalftraceFitting:
-    """The runner fits one halftrace per probe."""
+class TestComplianceProfiling:
+    """The runner emits one compliance profile per probe."""
 
-    def test_clean_decay_curve_produces_a_halftrace(self, tmp_path: Path) -> None:
+    def test_clean_decay_curve_is_classified_gradient_with_halftrace(
+        self, tmp_path: Path
+    ) -> None:
         result = run_pilot(
             model="x",
             n_values=[5, 10, 20],
@@ -184,24 +186,29 @@ class TestHalftraceFitting:
             output_path=tmp_path / "out.jsonl",
             trial=_decaying_trial({5: 1.0, 10: 0.7, 20: 0.2}),
         )
-        h = result.halftraces["state_amnesia"]
-        assert h is not None
-        assert h.value is not None
-        assert 10 < h.value < 20
+        profile = result.profiles["state_amnesia"]
+        assert profile is not None
+        assert profile.shape == "gradient"
+        assert profile.halftrace is not None
+        assert 10 < profile.halftrace < 20
 
-    def test_no_crossing_yields_none_value(self, tmp_path: Path) -> None:
+    def test_flat_high_compliance_is_classified_perfect(
+        self, tmp_path: Path
+    ) -> None:
         result = run_pilot(
             model="x",
             n_values=[5, 10],
             reps=2,
             output_path=tmp_path / "out.jsonl",
-            trial=_fake_trial(0.9),
+            trial=_fake_trial(1.0),
         )
-        h = result.halftraces["state_amnesia"]
-        assert h is not None
-        assert h.value is None
+        profile = result.profiles["state_amnesia"]
+        assert profile is not None
+        assert profile.shape == "perfect"
+        assert profile.halftrace is None
+        assert profile.commit_probability == 1.0
 
-    def test_one_halftrace_per_probe(self, tmp_path: Path) -> None:
+    def test_one_profile_per_probe(self, tmp_path: Path) -> None:
         result = run_pilot(
             model="x",
             n_values=[5, 10],
@@ -209,7 +216,7 @@ class TestHalftraceFitting:
             output_path=tmp_path / "out.jsonl",
             trial=_multi_probe_trial(state_value=1.0, instruction_value=0.3),
         )
-        assert set(result.halftraces) == {"state_amnesia", "instruction_decay"}
+        assert set(result.profiles) == {"state_amnesia", "instruction_decay"}
 
 
 class TestUsageAggregation:

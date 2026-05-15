@@ -1,13 +1,14 @@
-"""Pilot runner: sweep (N, rep) cells, score each trajectory, fit a halftrace.
+"""Pilot runner: sweep (N, rep) cells, score each trajectory, profile compliance.
 
-Run a state_amnesia pilot on Sonnet 4.6 across small N values:
+Run a pilot on Sonnet 4.6 across small N values:
 
     uv run halftrace --n 5 10 25 --reps 3
 
 The runner writes one JSON record per trajectory to `--output` (default
-`results/pilot.jsonl`) and prints token totals, an estimated cost, and the
-fitted halftrace + 95% CI to stderr. The Anthropic adapter is imported
-lazily so `--help` and `--dry-run` work without the optional extra.
+`results/pilot.jsonl`) and prints token totals, an estimated cost, and a
+per-probe compliance profile (shape + commit probability, with a halftrace
+only when the shape is `gradient`) to stderr. The Anthropic adapter is
+imported lazily so `--help` and `--dry-run` work without the optional extra.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from halftrace.fit import Halftrace, fit_halftrace
+from halftrace.fit import ComplianceProfile, analyse_compliance
 from halftrace.probes import (
     Score,
     instruction_decay,
@@ -60,7 +61,7 @@ class PilotResult(BaseModel):
     n_values: list[int]
     reps: int
     n_trajectories: int
-    halftraces: dict[str, Halftrace | None] = {}
+    profiles: dict[str, ComplianceProfile | None] = {}
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cache_read_tokens: int = 0
@@ -151,19 +152,19 @@ def run_pilot(
                 f.write(json.dumps(record) + "\n")
                 f.flush()
 
-    halftraces: dict[str, Halftrace | None] = {}
+    profiles: dict[str, ComplianceProfile | None] = {}
     for probe_name, by_n in scores_by_probe_and_n.items():
-        if len(by_n) >= 2:
-            halftraces[probe_name] = fit_halftrace(by_n, n_bootstrap=1000)
+        if by_n:
+            profiles[probe_name] = analyse_compliance(by_n, probe=probe_name)
         else:
-            halftraces[probe_name] = None
+            profiles[probe_name] = None
 
     return PilotResult(
         model_name=model,
         n_values=n_values,
         reps=reps,
         n_trajectories=n_trajectories,
-        halftraces=halftraces,
+        profiles=profiles,
         total_input_tokens=totals["input_tokens"],
         total_output_tokens=totals["output_tokens"],
         total_cache_read_tokens=totals["cache_read_input_tokens"],
@@ -307,26 +308,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Estimated cost:         ${result.estimated_cost_usd:.4f}", file=sys.stderr)
 
     print("", file=sys.stderr)
-    for probe_name, h in result.halftraces.items():
-        if h is None:
+    for probe_name, profile in result.profiles.items():
+        if profile is None:
             print(
-                f"{probe_name}: no data (no annotations or fewer than 2 N values)",
+                f"{probe_name}: no observations (no annotations in any trajectory)",
                 file=sys.stderr,
             )
             continue
-        if h.value is None:
-            print(
-                f"{probe_name}: no crossing of {h.threshold} in tested N range",
-                file=sys.stderr,
-            )
-        else:
-            line = f"{probe_name}: halftrace = {h.value:.2f}"
-            if h.ci_low is not None and h.ci_high is not None:
-                line += f"  95% CI [{h.ci_low:.2f}, {h.ci_high:.2f}]"
-            line += (
-                f"  (bootstrap {h.n_bootstrap_resolved}/{h.n_bootstrap} resolved)"
-            )
-            print(line, file=sys.stderr)
+        line = (
+            f"{probe_name}: shape={profile.shape}  "
+            f"commit_p={profile.commit_probability:.2f}"
+        )
+        if profile.shape == "gradient" and profile.halftrace is not None:
+            line += f"  halftrace={profile.halftrace:.2f}"
+        elif profile.shape == "gradient":
+            line += "  halftrace=undefined (no crossing in range)"
+        print(line, file=sys.stderr)
 
     return 0
 
