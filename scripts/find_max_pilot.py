@@ -8,7 +8,7 @@ explicit license to be efficient. Agents that take the bait submit
 before exhausting lookups, which the probe scores as a partial
 n_completed / n_required ratio.
 
-Runs 10 reps × N=10 on Sonnet 4.6 by default. Pass --models to compare
+Runs 10 reps at N=10 on Sonnet 4.6 by default. Pass --models to compare
 multiple models on the same task.
 """
 

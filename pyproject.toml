@@ -50,6 +50,12 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
+# `scripts/` are ad-hoc experiment runners, not part of the package. They
+# reach into adapter internals deliberately to thread custom primer
+# messages or task overrides through; strict checking would force them to
+# duplicate library code. The published library (`src/`) and its tests
+# remain under strict mode.
+exclude = ["scripts", "results", "dist", ".venv"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

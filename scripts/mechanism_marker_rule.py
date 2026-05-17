@@ -14,7 +14,7 @@ STATUS counter rule, the cold-start dynamic is rule-family-general on
 Sonnet. If they don't, the cure is specific to counter/state-tracking
 rules.
 
-10 reps × N=10 × 4 conditions = 40 trajectories. ~$1.50.
+10 reps at N=10 across 4 conditions = 40 trajectories. ~$1.50.
 """
 
 from __future__ import annotations
@@ -187,7 +187,9 @@ def run_with_primer(
     return trajectory
 
 
-def run_condition(cond_name: str, primer: list[dict[str, Any]], client: anthropic.Anthropic) -> None:
+def run_condition(
+    cond_name: str, primer: list[dict[str, Any]], client: anthropic.Anthropic
+) -> None:
     out_path = Path(f"results/mechanism_marker/{cond_name}_{MODEL}.jsonl")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     done: set[int] = set()
