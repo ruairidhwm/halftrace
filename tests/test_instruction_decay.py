@@ -226,3 +226,65 @@ class TestScoreSchema:
             Score.model_validate(
                 {"probe": "instruction_decay", "value": 1.0, "mystery": True}
             )
+
+
+class TestContainsKeyword:
+    """The contains_keyword matcher (substring presence check)."""
+
+    def _t(self, keyword: str, *, case_sensitive: bool = False) -> Trajectory:
+        t = Trajectory()
+        t.metadata["instruction_decay"] = {
+            "rule_id": "contains_keyword",
+            "params": {"keyword": keyword, "case_sensitive": case_sensitive},
+        }
+        return t
+
+    def test_keyword_anywhere_is_compliant(self) -> None:
+        t = self._t("investigating")
+        t.add_turn(role="assistant", content="I am investigating topic_3.")
+        assert instruction_decay(t).value == 1.0
+
+    def test_keyword_at_start_is_compliant(self) -> None:
+        t = self._t("investigating")
+        t.add_turn(role="assistant", content="Investigating now. Looking up topic_3.")
+        assert instruction_decay(t).value == 1.0
+
+    def test_keyword_at_end_is_compliant(self) -> None:
+        t = self._t("investigating")
+        t.add_turn(role="assistant", content="Looking up topic_3; investigating.")
+        assert instruction_decay(t).value == 1.0
+
+    def test_missing_keyword_is_non_compliant(self) -> None:
+        t = self._t("investigating")
+        t.add_turn(role="assistant", content="Looking up topic_3 now.")
+        assert instruction_decay(t).value == 0.0
+
+    def test_case_insensitive_by_default(self) -> None:
+        t = self._t("INVESTIGATING")
+        t.add_turn(role="assistant", content="i am investigating the topic")
+        assert instruction_decay(t).value == 1.0
+
+    def test_case_sensitive_when_set(self) -> None:
+        t = self._t("Investigating", case_sensitive=True)
+        t.add_turn(role="assistant", content="i am investigating the topic")
+        assert instruction_decay(t).value == 0.0
+
+    def test_partial_compliance_scores_fraction(self) -> None:
+        t = self._t("investigating")
+        t.add_turn(role="assistant", content="investigating now")
+        t.add_turn(role="assistant", content="forgot the word here")
+        t.add_turn(role="assistant", content="still investigating")
+        t.add_turn(role="assistant", content="dropped it again")
+        score = instruction_decay(t)
+        assert score.value == 0.5
+        assert score.n_observations == 4
+
+    def test_missing_keyword_param_raises(self) -> None:
+        t = Trajectory()
+        t.metadata["instruction_decay"] = {
+            "rule_id": "contains_keyword",
+            "params": {},
+        }
+        t.add_turn(role="assistant", content="hi")
+        with pytest.raises(ValueError, match="keyword"):
+            instruction_decay(t)

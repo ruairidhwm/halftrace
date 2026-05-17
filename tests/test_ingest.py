@@ -302,3 +302,162 @@ class TestRoundTripCompatibility:
         score = instruction_decay(t)
         assert score.value == 0.5
         assert score.n_observations == 2
+
+
+class TestLangSmithIngestion:
+    """Convert LangSmith trace runs."""
+
+    def test_minimal_run_with_no_llm_children_returns_empty_trajectory(self) -> None:
+        from halftrace import from_langsmith_run
+
+        run: dict[str, Any] = {"id": "run-1", "name": "Chain", "run_type": "chain"}
+        t = from_langsmith_run(run)
+        assert t.turns == []
+        assert t.metadata["langsmith"]["id"] == "run-1"
+        assert t.metadata["langsmith"]["n_llm_runs"] == 0
+
+    def test_nested_llm_run_messages_are_extracted(self) -> None:
+        from halftrace import from_langsmith_run
+
+        run: dict[str, Any] = {
+            "id": "root",
+            "name": "AgentExecutor",
+            "run_type": "chain",
+            "child_runs": [
+                {
+                    "id": "llm-1",
+                    "run_type": "llm",
+                    "inputs": {
+                        "messages": [
+                            {"role": "system", "content": "you are helpful"},
+                            {"role": "user", "content": "hi"},
+                        ]
+                    },
+                    "outputs": {
+                        "generations": [
+                            [{"message": {"role": "assistant", "content": "hello back"}}]
+                        ]
+                    },
+                }
+            ],
+        }
+        t = from_langsmith_run(run)
+        roles = [turn.role for turn in t.turns]
+        assert roles == ["system", "user", "assistant"]
+        assert t.turns[-1].content == "hello back"
+        assert t.metadata["langsmith"]["n_llm_runs"] == 1
+
+    def test_last_llm_run_is_used_when_multiple_present(self) -> None:
+        from halftrace import from_langsmith_run
+
+        run: dict[str, Any] = {
+            "id": "root",
+            "run_type": "chain",
+            "child_runs": [
+                {
+                    "id": "llm-1",
+                    "run_type": "llm",
+                    "inputs": {"messages": [{"role": "user", "content": "first"}]},
+                    "outputs": {"generations": [[{"message": {"content": "first answer"}}]]},
+                },
+                {
+                    "id": "llm-2",
+                    "run_type": "chat_model",
+                    "inputs": {
+                        "messages": [
+                            {"role": "user", "content": "first"},
+                            {"role": "assistant", "content": "first answer"},
+                            {"role": "user", "content": "second"},
+                        ]
+                    },
+                    "outputs": {
+                        "generations": [[{"message": {"content": "second answer"}}]]
+                    },
+                },
+            ],
+        }
+        t = from_langsmith_run(run)
+        # Trajectory should reflect the LAST LLM call's prefix + its output.
+        contents = [turn.content for turn in t.turns if turn.role in ("user", "assistant")]
+        assert contents == ["first", "first answer", "second", "second answer"]
+        assert t.metadata["langsmith"]["n_llm_runs"] == 2
+
+    def test_tool_calls_in_final_assistant_output_are_preserved(self) -> None:
+        from halftrace import from_langsmith_run
+
+        run: dict[str, Any] = {
+            "id": "root",
+            "run_type": "chain",
+            "child_runs": [
+                {
+                    "id": "llm-1",
+                    "run_type": "llm",
+                    "inputs": {"messages": [{"role": "user", "content": "search"}]},
+                    "outputs": {
+                        "generations": [
+                            [
+                                {
+                                    "message": {
+                                        "content": "looking it up",
+                                        "tool_calls": [
+                                            {
+                                                "id": "tc1",
+                                                "function": {
+                                                    "name": "search",
+                                                    "arguments": '{"q":"x"}',
+                                                },
+                                            }
+                                        ],
+                                    }
+                                }
+                            ]
+                        ]
+                    },
+                }
+            ],
+        }
+        t = from_langsmith_run(run)
+        assistant_turn = [turn for turn in t.turns if turn.role == "assistant"][-1]
+        assert assistant_turn.tool_calls is not None
+        assert assistant_turn.tool_calls[0].name == "search"
+        assert assistant_turn.tool_calls[0].args == {"q": "x"}
+
+    def test_model_name_extracted_from_invocation_params(self) -> None:
+        from halftrace import from_langsmith_run
+
+        run: dict[str, Any] = {
+            "id": "root",
+            "run_type": "chain",
+            "child_runs": [
+                {
+                    "id": "llm-1",
+                    "run_type": "llm",
+                    "extra": {"invocation_params": {"model": "gpt-4o-mini"}},
+                    "inputs": {"messages": [{"role": "user", "content": "hi"}]},
+                    "outputs": {
+                        "generations": [[{"message": {"content": "hello"}}]]
+                    },
+                }
+            ],
+        }
+        t = from_langsmith_run(run)
+        assert t.model == "gpt-4o-mini"
+
+    def test_children_key_also_walked(self) -> None:
+        from halftrace import from_langsmith_run
+
+        run: dict[str, Any] = {
+            "id": "root",
+            "run_type": "chain",
+            "children": [
+                {
+                    "id": "llm-1",
+                    "run_type": "llm",
+                    "inputs": {"messages": [{"role": "user", "content": "hi"}]},
+                    "outputs": {"generations": [[{"message": {"content": "hello"}}]]},
+                }
+            ],
+        }
+        t = from_langsmith_run(run)
+        roles = [turn.role for turn in t.turns]
+        assert roles == ["user", "assistant"]

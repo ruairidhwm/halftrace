@@ -29,6 +29,7 @@ from halftrace.probes import (
     Score,
     instruction_decay,
     narration_substitution,
+    premature_termination,
     state_amnesia,
     tool_repetition,
 )
@@ -44,6 +45,7 @@ PROBES: dict[str, Probe] = {
     "instruction_decay": instruction_decay,
     "tool_repetition": tool_repetition,
     "narration_substitution": narration_substitution,
+    "premature_termination": premature_termination,
 }
 
 _PRICING_PER_M_TOKENS: dict[str, tuple[float, float]] = {
@@ -57,6 +59,7 @@ _PRICING_PER_M_TOKENS: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-3.5-turbo": (0.50, 1.50),
 }
 
 

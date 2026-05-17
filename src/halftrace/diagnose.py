@@ -43,14 +43,32 @@ _DIAGNOSES: dict[Shape, tuple[str, list[str]]] = {
     ),
     "bimodal": (
         "Agent commits-or-abandons per trajectory: the choice is approximately a "
-        "coinflip and is stable for the rest of the trajectory once made. In the "
-        "pilot phase the first text turn (before any tool result has come back) "
-        "almost always violated the rule; after the first tool-result round trip "
-        "the agent either locked into compliance for the remainder or never engaged. "
-        "This is the most fixable shape with prompt engineering.",
+        "coinflip taken on the first text turn (before any tool result has come back) "
+        "and is stable for the rest of the trajectory once made. A multi-condition "
+        "mechanism investigation in the pilot phase narrowed this to a cold-start "
+        "effect *at short trajectory length*: with two prior trivial off-topic "
+        "user/assistant exchanges prepended to the message history (no format in the "
+        "primer responses), Sonnet 4.6's N=10 compliance on a counter rule moved from "
+        "0.58 to 1.00. The same intervention had no measurable effect at N=100 "
+        "(mean 0.47 with primer vs 0.51 baseline) and possibly made things worse at "
+        "N=200 (10/10 abandoned with primer vs 8/10 at baseline). The cure also did "
+        "not transfer cleanly to a different rule (front-loaded marker `[[END]]`), "
+        "where the zero-content primer worsened compliance instead of helping. So: "
+        "the warm-up fix is best understood as targeting the short-N cold-start "
+        "decision point, not as a universal cure for bimodal abandonment.",
         [
-            "Add a worked example response in the system prompt. Agents that see "
-            "the rule modelled tend to lock into compliance.",
+            "Prepend a brief synthetic warm-up exchange to the message history "
+            "before the real task starts. Two off-topic user/assistant Q&A turns "
+            "are sufficient at short trajectory length (N ≲ 25). The format does "
+            "not need to appear in the primer responses for the intervention to work.",
+            "For long trajectories (N ≥ 50), the warm-up cure does not help. "
+            "Long-context abandonment is a separate failure mode, plausibly "
+            "system-prompt attention fade. Try periodically restating the rule in "
+            "user turns at the depth where compliance starts dropping, or "
+            "reinjecting the system prompt via a tool-result-shaped reminder.",
+            "If you control only the system prompt: add a worked example response. "
+            "Agents that see the rule modelled tend to lock into compliance; this "
+            "is a parallel intervention to the warm-up.",
             "Restate the rule in the initial user message in addition to the system "
             "prompt — agents are more likely to follow rules they've seen recently.",
             "Consider relaxing the rule on turn 1 (before any tool result). The "

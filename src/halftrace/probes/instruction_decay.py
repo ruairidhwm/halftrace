@@ -41,9 +41,22 @@ def _starts_with_pattern(content: str, params: dict[str, Any]) -> bool:
     return re.match(pattern, content.lstrip()) is not None
 
 
+def _contains_keyword(content: str, params: dict[str, Any]) -> bool:
+    keyword = params.get("keyword")
+    if not isinstance(keyword, str):
+        raise ValueError(
+            f"contains_keyword rule requires a 'keyword' string param, got {keyword!r}"
+        )
+    case_sensitive = params.get("case_sensitive", False)
+    if case_sensitive:
+        return keyword in content
+    return keyword.lower() in content.lower()
+
+
 _BUILTIN_MATCHERS: dict[str, Matcher] = {
     "end_with_marker": _ends_with_marker,
     "starts_with_pattern": _starts_with_pattern,
+    "contains_keyword": _contains_keyword,
 }
 
 

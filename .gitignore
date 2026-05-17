@@ -21,6 +21,9 @@ wheels/
 .env
 .env.local
 
+# Claude Code local settings
+.claude/
+
 # Experiment outputs
 results/
 *.jsonl

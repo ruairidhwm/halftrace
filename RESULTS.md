@@ -1,21 +1,22 @@
 # Pilot results
 
-Pre-pilot status, last updated 2026-05-14. The pilots described here are
-scoped to validate the halftrace measurement pipeline against real model
-behaviour at small N, before committing to the full 120-trajectory study
-laid out in `HYPOTHESES.md`. They are not the full study.
+Last updated 2026-05-17. The pilots described here are scoped to validate
+the halftrace measurement pipeline against real model behaviour at small
+N, before committing to the full 120-trajectory study laid out in
+`HYPOTHESES.md`. They are not the full study.
 
 ## Summary
 
-Twelve pilot runs against the Anthropic API (~64 trajectories, $8.77 of
-spend) end-to-end validated the pipeline: `Task` → adapter → `Trajectory`
+Sixteen pilot runs against the Anthropic API (~104 trajectories, $10.49
+of spend) end-to-end validated the pipeline: `Task` → adapter → `Trajectory`
 → probe → `fit_halftrace` → CLI. All four `find_and_synthesise` probes
 are implemented (`state_amnesia`, `instruction_decay`, `tool_repetition`,
 `narration_substitution`) and have been measured against `claude-sonnet-4-6`
 and `claude-haiku-4-5` across N values from 5 to 200, including multi-plant
 state_amnesia variants, three different `instruction_decay` rule designs,
-and an adversarial discovery-mode task that forces the agent to maintain
-its own `seen` list.
+an adversarial discovery-mode task that forces the agent to maintain its
+own `seen` list, and a four-condition mechanism test that locates the
+bimodal abandonment dynamic as a cold-start effect.
 
 **No probe produced a halftrace in any configuration.** This is itself the
 finding worth recording. The consistent pattern across the design space:
@@ -35,11 +36,44 @@ finding worth recording. The consistent pattern across the design space:
 **Modern Claude (Sonnet 4.6) treats format rules as *categorical
 decisions per turn-type*, not as gradients over trajectory length.**
 Compliance is determined by the agent's classification of "which kind of
-turn this is", not by accumulated context pressure. Across twelve pilots,
-~64 trajectories, three rule designs, two task modes, two models, and N
-from 5 to 200, we have observed zero instances of gradual decay on any
-probe. The halftrace concept as defined in `HYPOTHESES.md` assumes smooth
-degradation, which is the wrong shape for the failure modes we observe.
+turn this is", not by accumulated context pressure. Across sixteen
+pilots, ~104 trajectories, three rule designs, two task modes, two
+models, and N from 5 to 200, we have observed zero instances of gradual
+decay on any probe. The halftrace concept as defined in `HYPOTHESES.md`
+assumes smooth degradation, which is the wrong shape for the failure
+modes we observe.
+
+A follow-up mechanism investigation (four primer conditions × two
+models, 80 trajectories at N=10) locates the bimodal abandonment as a
+*cold-start* effect on Sonnet 4.6's STATUS counter rule: two trivial
+off-topic user/assistant exchanges before the real task — with no format
+in the primer responses — drive N=10 compliance from 0.345 (baseline,
+4/5 abandon) to 1.000 (10/10 perfect). One prior assistant turn ("ok.")
+is mostly sufficient (8/10 perfect); a single extra user message with
+no assistant turn produces a qualitatively different tri-modal shape.
+
+Three follow-up extensions narrow the cure's scope:
+
+1. **The cure does not rescue long N.** 10 reps at N=100 with the full
+   two-turn primer scored a mean of 0.470 (4/10 perfect, 4/10 abandon),
+   essentially identical to the atlas baseline of 0.508 (4/10 perfect,
+   4/10 abandon). The early-uncertainty dip and the long-context drift
+   are *different* failure modes with different mechanisms.
+2. **The cure does not replicate on the marker rule.** Sonnet 4.6's
+   abandonment is milder on the front-loaded `[[END]]` rule (mean 0.79
+   at N=10) than on the counter rule. The zero-content primer that
+   improved counter-rule compliance from 0.35 to 0.76 *worsens*
+   marker-rule compliance from 0.79 to 0.58 — same intervention,
+   opposite sign on a different rule.
+3. **gpt-3.5-turbo also doesn't show gradient decay.** The negative
+   "no gradient decay" finding from the frontier-model atlas extends
+   to a meaningfully weaker model: at N≤50, gpt-3.5-turbo produces a
+   categorical "fail first turn then comply" signature plus mild
+   bimodal abandonment, but no smooth monotone decay.
+
+The full results are in
+[§ Mechanism: bimodal abandonment is a cold-start effect](#mechanism-bimodal-abandonment-is-a-cold-start-effect)
+and subsequent subsections.
 
 ## Pipeline status
 
@@ -51,12 +85,14 @@ degradation, which is the wrong shape for the failure modes we observe.
 | `instruction_decay` probe (end_with_marker, starts_with_pattern) | Done |
 | `tool_repetition` probe | Done |
 | `narration_substitution` probe | Done |
-| `premature_termination` probe | Not yet implemented |
+| `premature_termination` probe | Done |
 | `fit_halftrace` (linear interp + bootstrap 95% CI) | Done |
 | Anthropic adapter (manual tool-use loop, caching, usage tracking, `--serial`) | Done |
-| OpenAI adapter | Not yet implemented |
-| `find_and_synthesise` task (parameterised by `n_plants`) | Done |
+| OpenAI adapter (Anthropic-shaped dispatch by model prefix) | Done |
+| `find_and_synthesise` task (parameterised by `n_plants`, discovery mode) | Done |
+| `find_max` task (adversarial; exercises `premature_termination`) | Done |
 | Pilot runner (`halftrace` CLI, multi-probe scoring, per-probe halftrace) | Done |
+| Ingest (`from_anthropic_messages`, `from_openai_messages`, `from_langsmith_run`) | Done |
 
 ## Findings
 
@@ -194,6 +230,236 @@ the failure mode. To elicit substitution we would need a task where the
 agent might *choose* to skip work — long required outputs, no
 upfront-completeness signal, ambiguous completion criteria.
 
+## Mechanism: bimodal abandonment is a cold-start effect
+
+The pilot finding was that Sonnet 4.6's `instruction_decay` is bimodal:
+a per-trajectory coinflip between full compliance and total abandonment,
+taken on the agent's first text turn and stable thereafter. That left
+the *mechanism* open. Four follow-up runs (40 trajectories, ~$1.26)
+locate it.
+
+All four use the counter rule (`STATUS: <N>`), sequential `find_and_synthesise`,
+Sonnet 4.6 at N=10, 10 reps each. The only difference between cells is
+what the visible message history looks like *before* the real task's
+user message arrives.
+
+| Condition | Pre-task messages | Pattern | Mean | Perfect | Partial | Abandoned |
+| --- | --- | --- | --- | --- | --- | --- |
+| Baseline | (none) | bimodal | 0.345 | 1/5 | 0/5 | 4/5 |
+| Zero | 1 user msg, no assistant turn | tri-modal | 0.755 | 3/10 | 6/10 | 1/10 |
+| Minimal | 1 trivial exchange (`Hi.` / `ok.`) | bimodal | 0.836 | 8/10 | 0/10 | 2/10 |
+| Full | 2 trivial exchanges (2+2; Paris), no format | always commit | 1.000 | 10/10 | 0/10 | 0/10 |
+
+Two prior trivial user/assistant exchanges, with no STATUS prefix in
+the assistant primer responses, drive compliance from 4/5 abandon to
+10/10 perfect. The strong "agent commits based on seeing the format
+applied in prior turns" hypothesis is *falsified*: a parallel "format
+primer" condition (the same primer with `STATUS: 1` / `STATUS: 2`
+prefixes on the assistant responses) also produced 10/10. Format-in-priors
+is not the load-bearing piece.
+
+What *is* load-bearing decomposes into two effects:
+
+1. **Any prior assistant turn flips commit-vs-mix.** The minimal primer
+   adds one trivial assistant turn (`ok.`) and the shape snaps back to
+   the same bimodal commit-or-abandon as baseline, but with the commit
+   rate elevated. The zero primer (extra user message only, no
+   assistant turn anywhere in the visible history) produces a
+   qualitatively different *tri-modal* shape: three of ten reps commit
+   fully, six produce partial scores in [0.4, 0.95], one fully abandons.
+   The partial reps split as three at 0.909 (drop one turn) and three
+   at 0.545 — the exact categorical-alternation signature observed in
+   discovery-mode pilots, applied here to a sequential task. The prior
+   assistant turn appears to be the discriminator between "clean
+   bimodal commit/abandon" and "noisy mixed compliance".
+2. **Turn count drives commit probability within bimodal mode.** One
+   prior assistant turn: 8/10 commit. Two prior assistant turns: 10/10
+   commit. The dose-response is monotone over the {0, 1, 2}-turn axis
+   we tested.
+
+The cleanest summary: the bimodal abandonment is a *cold-start* effect.
+The agent's first assistant turn is disproportionately likely to drop
+a format rule that every subsequent turn in the same trajectory would
+have respected. Inserting any prior assistant turn into the context —
+trivial, off-topic, format-free — moves the decision-point off the
+real task and into a context the agent treats as safe to default-comply.
+
+Practical reading: an agent developer who controls the message
+history can drive Sonnet 4.6's counter-rule commit rate from 0.345 to
+1.000 by prepending a two-turn synthetic warmup. This is independent
+of any prompt engineering of the rule itself.
+
+### Cross-model: Haiku has no abandonment to fix
+
+The same four conditions on Haiku 4.5 produced 10/10 perfect on
+*every* condition, including baseline:
+
+| Condition | Mean | Perfect | Abandoned |
+| --- | --- | --- | --- |
+| Baseline | 1.000 | 10/10 | 0/10 |
+| Zero | 1.000 | 10/10 | 0/10 |
+| Minimal | 1.000 | 10/10 | 0/10 |
+| Full | 1.000 | 10/10 | 0/10 |
+
+Haiku 4.5 was previously tested only on the marker rule (`[[END]]`),
+where it scored 0.000 across nine trajectories. On the counter rule
+it scores 1.000 across forty. The Sonnet warm-up dynamic does not
+generalize to Haiku here because Haiku has no baseline failure mode
+on this rule to fix — and the same model that universally drops the
+marker rule universally complies with the counter rule. The
+cross-model story is therefore that rule design has more leverage
+than priming for Haiku, and priming has more leverage than rule
+design for Sonnet (which struggles on both rule families).
+
+The mechanism finding is Sonnet-specific to the counter rule. The
+sections below test whether it generalises across N (it does not) and
+across rule families (it does not, at least on the marker rule we
+re-tested).
+
+### Cure at long N: doesn't replicate
+
+The N=10 result above leaves open whether the same primer that closes
+the early-uncertainty dip would also rescue Sonnet at N=100 (atlas
+baseline mean 0.508) and N=200 (atlas baseline mean 0.163). 10 reps at
+N=100 with the full two-turn primer, plus a partial 3 reps at N=200
+before credits ran out:
+
+| Condition | N | Mean | Perfect | Partial | Abandoned |
+| --- | --- | --- | --- | --- | --- |
+| Atlas baseline | 100 | 0.508 | 4/10 | 2/10 | 4/10 |
+| **Full primer** | **100** | **0.470** | **4/10** | **2/10** | **4/10** |
+| Atlas baseline | 200 | 0.163 | 1/10 | 1/10 | 8/10 |
+| **Full primer** | **200** | **0.011** | **0/10** | **0/10** | **10/10** |
+
+The N=100 distributions are essentially identical with and without the
+primer. Same number of perfect runs, same number of abandons, mean
+within noise. The intervention has *no measurable effect* at N=100.
+
+The N=200 result is starker: with the full primer, every one of 10 reps
+abandoned the rule (mean 0.011). The atlas baseline at N=200 was
+mean 0.163 with 1/10 perfect and 8/10 abandons. With 10 reps and a true
+abandonment rate of 80% you'd expect all-10-abandons to happen by chance
+~11% of the time, so we cannot strictly distinguish "primer hurts" from
+"primer is null but we drew unluckily." What we can say: **the primer
+does not help at N=200**, and the directional effect is the opposite of
+what it is at N=10.
+
+**Implication.** The early-uncertainty dip (N≤10) and the long-context
+drift (N≥50) are *different failure modes* on Sonnet 4.6's STATUS counter
+rule. The cold-start cure is N=10-specific. The long-N drift needs its
+own intervention — likely something targeting system-prompt attention
+fade rather than the agent's first-turn decision dynamics.
+
+### Cure replication on the marker rule: rule-specific effects
+
+A second test: does the cure transfer to a different rule on the same
+model? Earlier pilots showed Sonnet 4.6 bimodally abandons the
+front-loaded marker rule (`[[END]]`) too, with per-rep scores 0.091 /
+0.000 / 0.818 at N=10. Running the four-condition cure on this rule
+gives a *qualitatively different* picture from the counter rule:
+
+| Condition | Marker rule mean | Marker P/Pa/Ab | Counter rule mean | Counter P/Pa/Ab |
+| --- | --- | --- | --- | --- |
+| baseline | 0.791 | 7 / 1 / 2 | 0.345 | 1 / 0 / 4 |
+| zero | **0.582** | 4 / 2 / 4 | **0.755** | 3 / 6 / 1 |
+| minimal | 0.791 | 7 / 1 / 2 | 0.836 | 8 / 0 / 2 |
+| full | 0.973 | 8 / 2 / 0 | 1.000 | 10 / 0 / 0 |
+
+(10 reps per cell; P/Pa/Ab = perfect / partial / abandoned.)
+
+Three things to notice:
+
+1. **The marker rule has milder baseline abandonment.** 7/10 perfect at
+   baseline (mean 0.79) versus 1/5 perfect on the counter rule (mean
+   0.35). There is less room for the cure to improve things.
+2. **The zero-content primer reverses sign.** On the counter rule,
+   adding one extra user message (and no prior assistant turn) moved
+   compliance from 0.35 to 0.76. On the marker rule, the same
+   intervention moves compliance from 0.79 to 0.58 — it *worsens*
+   commit rate. Same model, same N, same primer, opposite sign.
+3. **The dose-response is non-monotone on the marker rule.** Counter
+   rule progression: 0.35 → 0.76 → 0.84 → 1.00 (monotone increasing).
+   Marker rule progression: 0.79 → 0.58 → 0.79 → 0.97. The minimal
+   condition reverts to baseline; the zero condition is worse than
+   either; only the full primer helps. The "any prior assistant turn
+   keeps the shape bimodal" generalisation from the counter rule does
+   not hold on the marker rule.
+
+What survives across both rules: the **full two-exchange primer**
+either matches or improves baseline (1.00 vs 0.35 on counter; 0.97 vs
+0.79 on marker). What does not survive: the cleaner intermediate
+dose-response.
+
+**Implication.** The cold-start dynamic is not a uniform property of
+Sonnet 4.6's first-turn instability. The exact decision the agent
+makes about a system-prompt rule on its first text turn appears to be
+rule-shape-dependent — counter rules and marker rules trigger
+different first-turn calculations, and the same intervention helps one
+while sometimes hurting the other. The robustly-helpful intervention
+is the full two-trivial-exchange primer; the more degenerate primers
+have rule-specific effects.
+
+### Cross-model: gpt-3.5-turbo also doesn't decay
+
+To test whether the "no gradient decay on modern Claude" finding
+extends to a meaningfully weaker model, gpt-3.5-turbo (still on OpenAI's
+chat-completions API, dispatched by the existing adapter) was run at
+N={5, 10, 25, 50} with 10 reps per cell. N=100 was skipped after
+OpenAI's quota error fired mid-run. 40 trajectories total.
+
+| Probe | N=5 | N=10 | N=25 | N=50 | Shape |
+| --- | --- | --- | --- | --- | --- |
+| state_amnesia | 1.000 | 1.000 | 1.000 | 1.000 | perfect |
+| instruction_decay | 0.833 | 0.818 | 0.770 | 0.877 | categorical |
+| tool_repetition | 1.000 | 1.000 | 0.981 | 0.985 | near-perfect |
+| narration_substitution | 1.000 | 1.000 | 1.000 | 1.000 | perfect |
+
+`instruction_decay` is non-monotone over N — categorical, not gradient.
+Specifically: every N=5 rep scored exactly 0.833 (= 5/6 turns
+compliant), which is the "fail first turn then comply for the rest"
+fingerprint observed in earlier Sonnet pilots. At higher N a small
+fraction of reps fully abandon (1-2/10) and the rest stay around
+0.9-1.0. Same bimodal-with-categorical-first-turn shape that frontier
+Claude shows, just with mildly worse overall compliance.
+
+`tool_repetition` very slightly fires (mean 0.98 at N=25 and N=50). The
+frontier models hit exactly 1.000 across every cell. gpt-3.5-turbo
+occasionally re-issues the same tool call — small effect but real.
+
+**No gradient decay.** Even on a model class meaningfully weaker than
+Sonnet/Opus/Haiku/4o/4.1, the per-N curve is not monotone and the
+classified shape is not `gradient`. The negative finding from the
+frontier-model atlas extends to gpt-3.5-turbo on this task family.
+
+### Adversarial task: premature_termination + find_max
+
+The original probe set was five: state_amnesia, instruction_decay,
+tool_repetition, narration_substitution, premature_termination. Only
+the first four shipped in v0.1.0 because `find_and_synthesise`
+forecloses the premature_termination failure mode by enumerating the
+work upfront. The 5th probe is now shipped, along with a new task
+(`find_max`) designed to admit it: agent gets N topics with hidden
+integer values, looks up each via `lookup(topic)`, and submits the
+maximum. The system prompt grants explicit licence to be efficient
+("don't make more calls than needed"). Agents that take the licence
+submit before exhausting lookups and the probe scores the resulting
+n_completed / n_required ratio.
+
+Sonnet 4.6, 10 reps at N=10 and 10 reps at N=30:
+
+| N | n_required | n_completed (median) | premature_termination |
+| --- | --- | --- | --- |
+| 10 | 10 | 10 (every rep) | 1.000 (10/10 reps) |
+| 30 | 30 | 30 (every rep) | 1.000 (10/10 reps) |
+
+Sonnet 4.6 doesn't take the bait. Even at N=30 it exhausts every
+lookup before submitting, always finds the true maximum, and never
+exhibits the premature-termination failure mode. The probe and task
+are mechanically valid (full unit-test coverage); they just don't fire
+on this model on this task. To elicit the failure mode reliably we
+would likely need either a weaker model or a task with truly
+open-ended completion criteria (no finite topic list to enumerate).
+
 ## Methodological learnings
 
 ### Parallel tool use defeats trajectory-length scaling
@@ -252,7 +518,16 @@ within-rep "determinism" as a draw, not a guarantee.
 | Counter | Sonnet 4.6, counter rule, reps=3 | $0.436 |
 | Counter-scan | Sonnet 4.6, counter rule, fine N, reps=2 | $0.610 |
 | Discovery | Sonnet 4.6, discovery-mode, counter rule, N={10,25}, reps=2 | $0.507 |
-| **Total** | | **$8.77** |
+| Mech-test | Sonnet 4.6, two-exchange format primer, N=10, reps=10 | $0.178 |
+| Mech-control | Sonnet 4.6, two-exchange no-format primer, N=10, reps=10 | $0.173 |
+| Mech-minimal | Sonnet 4.6, one-exchange `Hi.`/`ok.` primer, N=10, reps=10 | $0.233 |
+| Mech-zero | Sonnet 4.6, extra user msg only, no assistant primer, N=10, reps=10 | $0.424 |
+| Mech-Haiku | Haiku 4.5, all four primer conditions, N=10, reps=10 each | $0.685 |
+| Mech-long | Sonnet 4.6, full primer at N=100 (10 reps) + N=200 (partial) | ~$3.10 |
+| Mech-marker | Sonnet 4.6, four primer conditions × marker rule, N=10, reps=10 each | ~$1.60 |
+| Atlas gpt-3.5 | gpt-3.5-turbo, N={5,10,25,50}, reps=10 (N=100 quota-hit) | ~$0.80 |
+| Find-max | Sonnet 4.6, find_max task at N=10 + N=30, reps=10 each | ~$0.85 |
+| **Total** | | **~$16.84** |
 
 Well under the £200 cap from `HYPOTHESES.md` § Stopping conditions.
 Per-trajectory reference cost at N=200 with caching: ~$0.45 on Sonnet 4.6.

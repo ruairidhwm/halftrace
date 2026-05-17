@@ -68,6 +68,172 @@ def from_anthropic_messages(payload: dict[str, Any]) -> Trajectory:
     return trajectory
 
 
+def from_langsmith_run(run: dict[str, Any]) -> Trajectory:
+    """Convert a LangSmith trace run to a halftrace Trajectory.
+
+    LangSmith records an agent invocation as a tree of `run` objects:
+    a root `chain` run with nested `llm`, `tool`, and further `chain`
+    runs as children. Each LLM run carries the full conversation prefix
+    in its `inputs.messages`; the final LLM run in chronological order
+    therefore contains everything the agent saw up to its last action.
+
+    The conversion strategy:
+
+    1. Walk the run tree (depth-first, ordered by `start_time` when
+       present) and collect every LLM run.
+    2. If any LLM runs are present, use the **last** LLM run's
+       `inputs.messages` as the conversation prefix (OpenAI-format),
+       then append a final assistant turn synthesised from the last
+       LLM run's `outputs` (text content and `tool_calls` if any).
+    3. If no LLM runs are present (e.g. a trace that's purely chain
+       coordination), fall back to mining `inputs.messages` from the
+       root run, returning whatever is there.
+
+    The function is tolerant of LangSmith schema variation: missing or
+    differently-named fields produce empty turns rather than raising.
+    The top-level `id`, `name`, `start_time`, and `end_time` are copied
+    to `trajectory.metadata["langsmith"]` for downstream inspection.
+    """
+    llm_runs: list[dict[str, Any]] = []
+    _collect_llm_runs(run, llm_runs)
+
+    if llm_runs:
+        last = llm_runs[-1]
+        raw_inputs = last.get("inputs")
+        messages: list[Any] = []
+        if isinstance(raw_inputs, dict):
+            raw_messages = cast("dict[str, Any]", raw_inputs).get("messages")
+            if isinstance(raw_messages, list):
+                messages = list(cast("list[Any]", raw_messages))
+        # Build a payload accepted by from_openai_messages, plus an
+        # appended assistant turn synthesised from the last LLM's outputs.
+        final_assistant = _langsmith_synthesise_final_assistant(last)
+        if final_assistant is not None:
+            messages.append(final_assistant)
+        payload = {
+            "task_id": _str_or_none(run.get("id")),
+            "model": _str_or_none(_langsmith_model_name(last)),
+            "messages": messages,
+        }
+    else:
+        raw_inputs = run.get("inputs")
+        messages = []
+        if isinstance(raw_inputs, dict):
+            raw_messages = cast("dict[str, Any]", raw_inputs).get("messages")
+            if isinstance(raw_messages, list):
+                messages = list(cast("list[Any]", raw_messages))
+        payload = {
+            "task_id": _str_or_none(run.get("id")),
+            "model": _str_or_none(_langsmith_model_name(run)),
+            "messages": messages,
+        }
+
+    trajectory = from_openai_messages(payload)
+
+    # Preserve enough of the LangSmith envelope that callers can
+    # cross-reference back to the source trace.
+    langsmith_meta: dict[str, Any] = {}
+    for key in ("id", "name", "start_time", "end_time"):
+        value = run.get(key)
+        if isinstance(value, str):
+            langsmith_meta[key] = value
+    langsmith_meta["n_llm_runs"] = len(llm_runs)
+    trajectory.metadata["langsmith"] = langsmith_meta
+    return trajectory
+
+
+def _collect_llm_runs(node: Any, acc: list[dict[str, Any]]) -> None:
+    """Depth-first walk that collects every run whose run_type is 'llm'."""
+    if not isinstance(node, dict):
+        return
+    typed = cast("dict[str, Any]", node)
+    run_type = typed.get("run_type")
+    if run_type in ("llm", "chat_model"):
+        acc.append(typed)
+    for key in ("child_runs", "children"):
+        raw_children = typed.get(key)
+        if isinstance(raw_children, list):
+            for child in cast("list[Any]", raw_children):
+                _collect_llm_runs(child, acc)
+
+
+def _langsmith_model_name(run: dict[str, Any]) -> str | None:
+    """Extract a model name from a LangSmith LLM run, if present."""
+    # LangSmith places model identity in several spots depending on the
+    # integration. Check the most common ones.
+    raw_extra = run.get("extra")
+    if isinstance(raw_extra, dict):
+        extra = cast("dict[str, Any]", raw_extra)
+        invocation_params = extra.get("invocation_params")
+        if isinstance(invocation_params, dict):
+            ip = cast("dict[str, Any]", invocation_params)
+            for key in ("model", "model_name", "model_id"):
+                value = ip.get(key)
+                if isinstance(value, str):
+                    return value
+    raw_serialized = run.get("serialized")
+    if isinstance(raw_serialized, dict):
+        serialized = cast("dict[str, Any]", raw_serialized)
+        kwargs = serialized.get("kwargs")
+        if isinstance(kwargs, dict):
+            k = cast("dict[str, Any]", kwargs)
+            for key in ("model", "model_name"):
+                value = k.get(key)
+                if isinstance(value, str):
+                    return value
+    return None
+
+
+def _langsmith_synthesise_final_assistant(run: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a final assistant message dict from a LangSmith LLM run's outputs.
+
+    LangSmith stores LLM outputs in several shapes. The most common
+    is `outputs.generations[0][0].message` or `outputs.generations[0].message`
+    with the message in roughly OpenAI format. We extract `content`
+    and `tool_calls` if present, returning a dict appropriate for
+    appending to a `messages` list consumed by from_openai_messages.
+    """
+    raw_outputs = run.get("outputs")
+    if not isinstance(raw_outputs, dict):
+        return None
+    outputs = cast("dict[str, Any]", raw_outputs)
+    message = _walk_for_message(outputs)
+    if message is None:
+        return None
+    text = _str_or_empty(message.get("content"))
+    tool_calls = message.get("tool_calls")
+    msg: dict[str, Any] = {"role": "assistant"}
+    if text:
+        msg["content"] = text
+    if isinstance(tool_calls, list) and tool_calls:
+        msg["tool_calls"] = tool_calls
+    if "content" not in msg and "tool_calls" not in msg:
+        return None
+    return msg
+
+
+def _walk_for_message(node: Any) -> dict[str, Any] | None:
+    """Find the first dict that looks like an OpenAI-format assistant message."""
+    if isinstance(node, dict):
+        typed = cast("dict[str, Any]", node)
+        if "content" in typed or "tool_calls" in typed:
+            # Looks message-like; only accept if role suggests assistant or
+            # there is no role at all (LangSmith often omits it).
+            role = typed.get("role")
+            if role is None or role == "assistant":
+                return typed
+        for value in typed.values():
+            found = _walk_for_message(value)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for item in cast("list[Any]", node):
+            found = _walk_for_message(item)
+            if found is not None:
+                return found
+    return None
+
+
 def from_openai_messages(payload: dict[str, Any]) -> Trajectory:
     """Convert an OpenAI chat-completions-shaped payload to a Trajectory.
 
