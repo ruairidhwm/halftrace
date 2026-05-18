@@ -399,6 +399,67 @@ while sometimes hurting the other. The robustly-helpful intervention
 is the full two-trivial-exchange primer; the more degenerate primers
 have rule-specific effects.
 
+### Long-N rescue: rule reinforcement at turn 1 is the cure (for prefix rules)
+
+The two preceding sections close out one mechanism story (the cold-start cure is N=10-specific and rule-shape-dependent) and open another: *something* is driving abandonment at N=100 and N=200, and it isn't the same thing that drives abandonment at N=10. This section reports a three-experiment progression that locates the long-N mechanism and produces a robust cure for prefix-style rules.
+
+**Experiment 1 — periodic mid-trajectory reminders (the obvious first hypothesis).** The simplest model of the long-N drift is system-prompt attention fade: the rule, declared once at the top of context, loses salience by turn ~50 and the agent stops applying it. The natural intervention is to re-surface the rule in user-side content where attention is highest. 9 reps at N=100, Sonnet 4.6, counter rule, with a 30-token rule reminder appended to every K=10-th tool_result user message (i.e. 10 reminders evenly spaced through 100 turns):
+
+| Condition | N | Mean | Perfect | Partial | Abandoned |
+| --- | --- | --- | --- | --- | --- |
+| Atlas baseline | 100 | 0.508 | 4/10 | 2/10 | 4/10 |
+| **Periodic K=10 reminder** | **100** | **0.701** | **5/9** | **2/9** | **2/9** |
+
+Mean lifts from 0.51 to 0.70 — a real signal — but the bimodal abandonment failure mode persists. Inspecting per-rep compliance maps reveals the actual structure: every one of the 9 reps falls into one of exactly **three discrete behaviours**, with no smooth fade visible anywhere:
+
+```
+rep=0  score=1.000  1111111111|1111111111|... (perfect; 5 reps total)
+rep=3  score=0.505  1.1.1.1.1.|1.1.1.1.1.|... (stable alternation; 2 reps total)
+rep=4  score=0.505  1.1.1.1.1.|1.1.1.1.1.|... (insensitive to reminders)
+rep=1  score=0.149  1.1.1.1.1.|1.........|... (one-shot rescue; 2 reps total)
+rep=7  score=0.149  1.1.1.1.1.|1.........|... (alternate for 10 turns, then collapse)
+```
+
+(`|` marks where a reminder primes the following turn.)
+
+The aggregate "fade curve" — d=0 right-after-reminder = 100% (90/90), declining to ~56% at d=1 — is an artifact of mixing these three behaviours, not a real attention decay signal. For the abandon-class reps, the reminder rescues exactly one assistant turn per delivery and accomplishes nothing in between. For the alternation-class reps, the reminder has no effect at all. **This falsifies the attention-fade hypothesis.** A fading agent would show graded compliance across d=0..9 within trajectories; instead we see a step function that mechanistically reflects three categorical strategies.
+
+The diagnostic detail that matters: both abandon-class reps (1 and 7) showed `1.1.1.1.1.` alternating compliance for the first 10 turns — *before* the first reminder fires. Then, immediately after the first reminder lands at turn 11, they collapsed to the one-shot pattern for the remainder. So the strategy commitment appears to happen within the opening ~10 turns, and the first reminder confirms the wrong reading: "the user reinforces this when it matters; I don't need to do it on my own."
+
+**Experiment 2 — reminder visible from turn 1.** If strategy lock-in happens in the first ~10 turns, the rescue is to deliver rule reinforcement *before* the agent has a chance to commit to a non-compliant strategy. 10 reps at N=100, same reminder text appended to the initial user message (so the agent sees it before producing turn 1), then K=10 cadence thereafter:
+
+| Condition | N | Mean | Perfect | Partial | Abandoned |
+| --- | --- | --- | --- | --- | --- |
+| Atlas baseline | 100 | 0.508 | 4/10 | 2/10 | 4/10 |
+| Periodic K=10 (mid-trajectory only) | 100 | 0.701 | 5/9 | 2/9 | 2/9 |
+| **Reminder from turn 1 + K=10** | **100** | **1.000** | **10/10** | **0/10** | **0/10** |
+
+Every single one of 1010 assistant turns complied. No alternation, no abandonment, no partial reps. The intervention is binary: pre-empting strategy commitment with a reminder at turn 1 takes the bimodal distribution at this N from coinflip to delta-at-1.
+
+**Experiment 3 — depth verification at N=200.** Atlas baseline at N=200 is mean 0.163 (~80% of trajectories abandon). If the rescue is real and not a fragile artifact of N=100 specifically, it should also hold at twice the depth. 10 reps at N=200, same intervention:
+
+| Condition | N | Mean | Perfect | Partial | Abandoned |
+| --- | --- | --- | --- | --- | --- |
+| Atlas baseline | 200 | 0.163 | 1/10 | 1/10 | 8/10 |
+| **Reminder from turn 1 + K=10** | **200** | **1.000** | **10/10** | **0/10** | **0/10** |
+
+10/10 perfect across 2010 assistant turns at N=200, against a 6x lower baseline. The cure has **no depth ceiling within the tested range**.
+
+**Experiment 4 — marker rule generality test.** The cold-start cure didn't generalise cleanly from counter to marker rule (§previous), so the obvious risk for any new intervention is rule-specific success. 10 reps at N=100 on the marker rule with the same reminder-from-start protocol (initial user message + K=10 cadence):
+
+| Condition | Rule | N | Mean | Perfect | Partial | Abandoned |
+| --- | --- | --- | --- | --- | --- | --- |
+| Reminder from turn 1 + K=10 | counter | 100 | 1.000 | 10/10 | 0/10 | 0/10 |
+| **Reminder from turn 1 + K=10** | **marker** | **100** | **0.191** | **0/10** | **2/10** | **8/10** |
+
+The intervention that produced flawless compliance on the counter rule produces near-complete abandonment on the marker rule. The pattern is also qualitatively different: every single rep shows zero compliance for turns 1-10 — the initial-user-message reminder accomplished nothing for the first 10 turns of any rep. Of the 10 reps, 2 then snap to full compliance the moment the first mid-trajectory reminder lands at turn 11 and sustain perfectly through turn 100 (score 0.901), 1 falls into the one-shot rescue pattern (score 0.099), and 7 never apply `[[END]]` at all.
+
+**Implication.** Strategy lock-in by turn ~10 is the mechanism driving long-N bimodal abandonment on Sonnet 4.6, and for the counter rule it can be reliably pre-empted by restating the rule in the initial user message. The cure is depth-robust (10/10 at both N=100 and N=200) but rule-shape-dependent (10/10 on counter, 0/10 on marker). What's now ruled out as the mechanism: system-prompt attention fade (the periodic reminder data showed step-function, not graded, compliance), accumulating tool-result tokens diluting the format signal (same), and any continuous-decay framing. What's now ruled out as a cure: the cold-start primer (which fires before turn 1 and fades by turn 10), and mid-trajectory periodic reminders without an initial-message reminder (which rescue at most one assistant turn per delivery for already-committed-to-abandon trajectories).
+
+The asymmetry between prefix/counter rules and suffix/marker rules is itself an interesting finding — it suggests Sonnet's commitment dynamics interact with where in the response the rule expects compliance. Hypotheses we have not tested but are now plausible: token-position attention bias (prefix slots in at the most-attended position), `[[END]]`-as-stop-token semantic confusability, or the initial-message reminder being interpreted as a clarification of the current request rather than as a persistent behavioural rule.
+
+**Spend on this section: ~$13.50** (one K=10 run partly through plus three completed 10-rep runs). The cure is shipped as a primary suggestion in `diagnose()`'s `bimodal` branch with the marker-rule limitation documented as a caveat.
+
 ### Cross-model: gpt-3.5-turbo also doesn't decay
 
 To test whether the "no gradient decay on modern Claude" finding
