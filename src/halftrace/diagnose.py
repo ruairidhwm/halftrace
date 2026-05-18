@@ -43,36 +43,53 @@ _DIAGNOSES: dict[Shape, tuple[str, list[str]]] = {
     ),
     "bimodal": (
         "Agent commits-or-abandons per trajectory: the choice is approximately a "
-        "coinflip taken on the first text turn (before any tool result has come back) "
-        "and is stable for the rest of the trajectory once made. A multi-condition "
-        "mechanism investigation in the pilot phase narrowed this to a cold-start "
-        "effect *at short trajectory length*: with two prior trivial off-topic "
-        "user/assistant exchanges prepended to the message history (no format in the "
-        "primer responses), Sonnet 4.6's N=10 compliance on a counter rule moved from "
-        "0.58 to 1.00. The same intervention had no measurable effect at N=100 "
-        "(mean 0.47 with primer vs 0.51 baseline) and possibly made things worse at "
-        "N=200 (10/10 abandoned with primer vs 8/10 at baseline). The cure also did "
-        "not transfer cleanly to a different rule (front-loaded marker `[[END]]`), "
-        "where the zero-content primer worsened compliance instead of helping. So: "
-        "the warm-up fix is best understood as targeting the short-N cold-start "
-        "decision point, not as a universal cure for bimodal abandonment.",
+        "coinflip taken in the first ~10 assistant turns and stable thereafter. "
+        "Mechanism investigation on Sonnet 4.6's STATUS counter rule narrowed this "
+        "to **early-trajectory strategy commitment**: the agent picks one of three "
+        "compliance strategies (full compliance, stable alternation, or abandonment "
+        "with one-shot rescue) within the opening turns, and the choice is robust "
+        "to mid-trajectory perturbation. Periodic mid-trajectory reminders rescue "
+        "exactly one assistant turn per delivery for the abandon class and have no "
+        "effect on the alternation class — falsifying the attention-fade hypothesis "
+        "and showing the failure is a strategy lock-in rather than a gradual decay. "
+        "The intervention that works: restating the rule once in the initial user "
+        "message pre-empts the commitment. On the counter rule this drives compliance "
+        "to 10/10 perfect at both N=100 and N=200 (2010 perfect assistant turns), "
+        "where baseline is mean 0.51 and 0.16 respectively. The same intervention "
+        "fails completely on the front-loaded marker rule (`[[END]]`): 0/10 perfect "
+        "at N=100, mean 0.19. Prefix/stateful rules and suffix/stateless rules "
+        "appear to engage different commitment dynamics on Sonnet; the rescue is "
+        "validated only on the former.",
         [
-            "Prepend a brief synthetic warm-up exchange to the message history "
-            "before the real task starts. Two off-topic user/assistant Q&A turns "
-            "are sufficient at short trajectory length (N ≲ 25). The format does "
-            "not need to appear in the primer responses for the intervention to work.",
-            "For long trajectories (N ≥ 50), the warm-up cure does not help. "
-            "Long-context abandonment is a separate failure mode, plausibly "
-            "system-prompt attention fade. Try periodically restating the rule in "
-            "user turns at the depth where compliance starts dropping, or "
-            "reinjecting the system prompt via a tool-result-shaped reminder.",
+            "**Primary intervention for prefix/stateful rules**: restate the rule "
+            "verbatim (or as a tight paraphrase) in the initial user message in "
+            "addition to the system prompt. Validated on Sonnet 4.6's STATUS "
+            "counter rule at N=100 and N=200 (10/10 perfect, both depths). "
+            "Optionally add a periodic in-trajectory restatement every ~10 turns "
+            "as belt-and-braces, though the initial-message reminder appears to "
+            "be the load-bearing piece — strategy commitment happens early.",
+            "**At short N (≤ 25), a cold-start warm-up primer is the alternative.** "
+            "Two off-topic user/assistant Q&A turns prepended before the real task "
+            "drive Sonnet 4.6's N=10 compliance on a counter rule from 0.58 to 1.00. "
+            "Format does not need to appear in the primer responses. This works at "
+            "short N because the trajectory ends before strategy lock-in would "
+            "matter; it does NOT generalise to long N.",
+            "**Caveat for suffix/marker rules**: neither the initial-user-message "
+            "reminder nor the warm-up primer reliably rescues a suffix rule like "
+            "`end every response with [[END]]` at long N. On the marker rule at "
+            "N=100, the reminder intervention produced 0/10 perfect with 8/10 "
+            "complete abandonment despite the reminder being visible at turn 1. "
+            "If your rule is a suffix marker, expect the bimodal failure mode to "
+            "persist; consider redesigning the rule as a prefix (counter or marker) "
+            "if that's possible, or accept the bimodal abandonment as a constraint.",
+            "Inspect details.per_turn on the instruction_decay Score to identify "
+            "which sub-pattern is firing: stable `1.1.1.1.1.` alternation, "
+            "`1.........` one-per-K-turns rescue, or full abandonment. The patterns "
+            "have different appropriate interventions and the choice of suggestion "
+            "above changes accordingly.",
             "If you control only the system prompt: add a worked example response. "
-            "Agents that see the rule modelled tend to lock into compliance; this "
-            "is a parallel intervention to the warm-up.",
-            "Restate the rule in the initial user message in addition to the system "
-            "prompt — agents are more likely to follow rules they've seen recently.",
-            "Consider relaxing the rule on turn 1 (before any tool result). The "
-            "first text turn is consistently the weakest compliance point.",
+            "Agents that see the rule modelled in concrete form commit to compliance "
+            "more reliably; this is a weaker parallel to the initial-message reminder.",
         ],
     ),
     "categorical": (
