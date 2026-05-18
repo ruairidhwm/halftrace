@@ -1,6 +1,6 @@
 [project]
 name = "halftrace"
-version = "0.1.1"
+version = "0.1.2"
 description = "Diagnose how your agent's compliance with rules varies across trajectory length."
 readme = "README.md"
 authors = [{ name = "Ruairidh Wynne-McCorry" }]
