@@ -58,6 +58,10 @@ of primer messages + output path + optional task override.
 | [`mechanism_content_rule.py`](mechanism_content_rule.py) | all four conditions | content keyword `investigating` | 10/10 perfect at baseline — no failure to cure |
 | [`mechanism_marker_rule.py`](mechanism_marker_rule.py) | all four conditions | marker `[[END]]` | non-monotone dose-response; zero condition worsens compliance |
 | [`mechanism_long.py`](mechanism_long.py) | full primer at N=100 and N=200 | counter | cure fails at long N (mean 0.47 at N=100, mean 0.01 at N=200) |
+| [`mechanism_periodic_reminder.py`](mechanism_periodic_reminder.py) | no primer; reminder appended to every K-th tool_result user message at N=100 (K∈{10, 25}) | counter | tests whether system-prompt attention fade explains the long-N drift that the cold-start cure leaves untouched |
+| [`mechanism_reminder_from_start.py`](mechanism_reminder_from_start.py) | reminder in the initial user message + K=10 cadence thereafter, N=100 | counter | follow-up to the K=10 result: tests whether pre-empting strategy commitment (rather than perturbing it mid-trajectory) rescues compliance — produced 10/10 perfect |
+| [`mechanism_reminder_from_start_n200.py`](mechanism_reminder_from_start_n200.py) | same as above, N=200 | counter | depth test: does the rescue hold at twice the trajectory length where baseline is mean 0.16? |
+| [`mechanism_reminder_marker_from_start.py`](mechanism_reminder_marker_from_start.py) | same intervention, N=100 | marker `[[END]]` | rule-generality test: does the reminder-from-start rescue work for a different rule family (suffix marker vs prefix counter)? |
 
 `_primer_runner.py` exports `run_with_primer(task, *, primer, model, client)`
 and `score_all(trajectory)`. To add a ninth mechanism condition, write a
