@@ -427,6 +427,12 @@ class TestAnalyseSubcommand:
         args = parse_args(["analyse", "--input", "logs.jsonl", "--format", "openai"])
         assert args.format == "openai"
 
+    def test_analyse_langsmith_format(self) -> None:
+        args = parse_args(
+            ["analyse", "--input", "logs.jsonl", "--format", "langsmith"]
+        )
+        assert args.format == "langsmith"
+
     def test_analyse_commit_threshold(self) -> None:
         args = parse_args(
             ["analyse", "--input", "logs.jsonl", "--commit-threshold", "0.8"]

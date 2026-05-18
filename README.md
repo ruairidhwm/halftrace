@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/halftrace.svg)](https://pypi.org/project/halftrace/)
 [![License](https://img.shields.io/pypi/l/halftrace.svg)](LICENSE)
 
-`halftrace` is a diagnostic instrument for agent trajectories. Point it at your existing OpenAI or Anthropic message logs and it tells you, per failure mode:
+`halftrace` is a diagnostic instrument for agent trajectories. Point it at your existing OpenAI, Anthropic, or LangSmith logs and it tells you, per failure mode:
 
 - **what shape** of compliance your agent has (perfect / abandoned / bimodal / categorical / gradient),
 - **why** that shape is likely showing up, and
@@ -33,7 +33,7 @@ Most agent developers already have trajectory logs. Point `halftrace` at them:
 halftrace analyse --input my_logs.jsonl --format openai
 ```
 
-Each line of `my_logs.jsonl` is one trajectory as an OpenAI chat-completions payload (or Anthropic `messages.create()` payload, with `--format anthropic`). The tool ingests each, scores every probe, and prints a profile per probe:
+Each line of `my_logs.jsonl` is one trajectory as an OpenAI chat-completions payload (or an Anthropic `messages.create()` payload with `--format anthropic`, or a LangSmith run-tree dict with `--format langsmith`). The tool ingests each, scores every probe, and prints a profile per probe:
 
 ```
 Analysing 124 trajectories from my_logs.jsonl (openai format)
@@ -145,6 +145,8 @@ profile = analyse_compliance({0: scores}, probe="too_many_apologies")
 print(f"{profile.shape}: {profile.commit_probability:.2f}")
 print(diagnose(profile).cause)
 ```
+
+The corresponding ingest functions for the other two formats are `from_anthropic_messages` and `from_langsmith_run` — same shape, one trajectory per call.
 
 Probes that need configuration (e.g. `instruction_decay`'s rule) read it from `Trajectory.metadata`. Tasks set this metadata; ingested trajectories receive it from the source payload's optional `metadata` field.
 

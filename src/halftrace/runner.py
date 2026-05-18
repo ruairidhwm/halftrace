@@ -319,9 +319,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     analyse.add_argument(
         "--format",
-        choices=["anthropic", "openai"],
+        choices=["anthropic", "openai", "langsmith"],
         default="anthropic",
-        help="Input message format (default: anthropic).",
+        help=(
+            "Input message format (default: anthropic). With "
+            "'langsmith', each JSONL line is a LangSmith run-tree dict "
+            "as returned by the LangSmith API."
+        ),
     )
     analyse.add_argument(
         "--commit-threshold",
@@ -348,9 +352,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     compare.add_argument(
         "--format",
-        choices=["anthropic", "openai"],
+        choices=["anthropic", "openai", "langsmith"],
         default="anthropic",
-        help="Input message format (default: anthropic).",
+        help=(
+            "Input message format (default: anthropic). With "
+            "'langsmith', each JSONL line is a LangSmith run-tree dict "
+            "as returned by the LangSmith API."
+        ),
     )
     compare.add_argument(
         "--commit-threshold",
@@ -505,9 +513,18 @@ def _run_compare_command(args: argparse.Namespace) -> int:
 
 
 def _load_trajectories(path: Path, fmt: str) -> list[Trajectory]:
-    from halftrace.ingest import from_anthropic_messages, from_openai_messages
+    from halftrace.ingest import (
+        from_anthropic_messages,
+        from_langsmith_run,
+        from_openai_messages,
+    )
 
-    parser_fn = from_anthropic_messages if fmt == "anthropic" else from_openai_messages
+    parsers: dict[str, Callable[[dict[str, Any]], Trajectory]] = {
+        "anthropic": from_anthropic_messages,
+        "openai": from_openai_messages,
+        "langsmith": from_langsmith_run,
+    }
+    parser_fn = parsers[fmt]
     trajectories: list[Trajectory] = []
     with path.open() as f:
         for raw_line in f:
